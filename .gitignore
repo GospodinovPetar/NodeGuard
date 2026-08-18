@@ -1,0 +1,9 @@
+.DS_Store
+.serena
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+huey.db*
+staticfiles/
+.env

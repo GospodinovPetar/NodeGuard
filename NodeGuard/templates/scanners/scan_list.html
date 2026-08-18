@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Scans</h1>
+
+<form method="post" action="{% url 'scanners:trigger' %}" class="mb-6">
+    {% csrf_token %}
+    <button type="submit" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">
+        Trigger demo scan
+    </button>
+</form>
+
+<div id="scan-table"
+     hx-get="{% url 'scanners:rows' %}"
+     hx-trigger="every 2s"
+     hx-swap="innerHTML">
+    {% include "scanners/_scan_rows.html" %}
+</div>
+{% endblock %}

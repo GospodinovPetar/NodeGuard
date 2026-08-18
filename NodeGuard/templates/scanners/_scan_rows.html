@@ -1,0 +1,37 @@
+<table class="w-full text-left text-sm">
+    <thead class="text-slate-400">
+        <tr>
+            <th class="py-2">#</th>
+            <th>Target</th>
+            <th>Scanner</th>
+            <th>Status</th>
+            <th>Findings</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for scan in scans %}
+        <tr class="border-t border-slate-800">
+            <td class="py-2">{{ scan.id }}</td>
+            <td>{{ scan.target }}</td>
+            <td>{{ scan.scanner_name }}</td>
+            <td>
+                <span class="px-2 py-0.5 rounded text-xs
+                    {% if scan.status == 'done' %}bg-emerald-900 text-emerald-300
+                    {% elif scan.status == 'failed' %}bg-red-900 text-red-300
+                    {% elif scan.status == 'running' %}bg-amber-900 text-amber-300
+                    {% else %}bg-slate-800 text-slate-300{% endif %}">
+                    {{ scan.status }}
+                </span>
+            </td>
+            <td>
+                {% for finding in scan.findings.all %}
+                <div class="text-slate-400">[{{ finding.severity }}] {{ finding.message }}</div>
+                {% endfor %}
+                {% if scan.error %}<div class="text-red-400">{{ scan.error }}</div>{% endif %}
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="py-4 text-slate-500">Няма scans още.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
