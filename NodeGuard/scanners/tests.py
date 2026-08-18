@@ -396,10 +396,13 @@ class CollectScanOptionsTests(SimpleTestCase):
 class CatalogIndexViewTests(TestCase):
     def test_lists_every_registered_scanner_with_availability(self):
         response = self.client.get(reverse("catalog:index"))
+        statuses = tool_status()
 
         self.assertEqual(response.status_code, 200)
-        for name in list_scanners():
-            self.assertContains(response, name)
-        # demo's binary is sys.executable, so it's always available — the
-        # "Enabled" badge should render at least once regardless of host.
-        self.assertContains(response, "Enabled")
+        for status in statuses:
+            self.assertContains(response, status.name)
+        # demo's binary is sys.executable, so it's always installed — the
+        # count in the header should reflect that regardless of host.
+        available = sum(1 for s in statuses if s.available)
+        self.assertContains(response, f"{available}/{len(statuses)} available")
+        self.assertContains(response, "installed")
