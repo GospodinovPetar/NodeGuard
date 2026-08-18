@@ -13,8 +13,8 @@
 - [x] `GobusterScanner` implementиран, регистриран, тестван (parse_output + build_command), verified с реален scan
 - [x] nmap+gobuster bake-нати в Docker image-а (замества per-OS install scripts — виж baseline doc)
 - [x] `NmapScanner` implementиран (Rado)
-- [ ] Catalog on/off toggle UI + scan-options dropdown research (Denis)
-- [ ] Custom wordlist upload за gobuster (Denis) — fallback към bundled `common.txt` ако няма upload
+- [x] Catalog on/off toggle UI + scan-options dropdown (Денис — виж бележката по-долу)
+- [x] Custom wordlist upload за gobuster (Денис — виж бележката по-долу) — fallback към bundled `common.txt` ако няма upload
 
 ## Архитектурна бележка: options за scanners
 
@@ -43,9 +43,14 @@
 - Fix: `test_unavailable_scanner_creates_no_scan` (Петъровия TriggerScanViewTests) е бил environment-dependent — приемал е, че gobuster никога не е инсталиран; счупил се веднага щом Петър го bake-на в Docker image-а. Разделен на два детерминистични теста: unregistered-scanner (истинско "непознат scanner" branch-а) и uninstalled-scanner (мокнат `is_available() → False`, не зависи от кои tools реално стоят на машината)
 - ruff+black чисто
 
-### Денис — catalog toggle UI + scan-options research
+### Денис — catalog toggle UI + scan-options research ⚠️ built by Rado to unblock, Денис still owns the review + learning nugget
 
-- Frontend: catalog on/off страница, показваща `list_scanners()` + `is_available()` за всеки — реюзва вече наличния pattern от scan-trigger dropdown-а (disabled + "не е инсталиран")
-- Scan-trigger UI подобрение: dropdown/checkboxes за scan-type флагове (nmap `-sV`/`-A`) вместо hardcoded defaults в `build_command`
-- **Custom wordlist upload за gobuster**: file upload поле в scan-trigger формата — ако потребителят качи `.txt`, той се ползва вместо bundled `common.txt`. Съхранение: `FileField` на `Scan` (или отделен upload → temp path, подаден през `options` dict от архитектурната бележка по-горе). Validation: разумен size limit (напр. 1-2 MB), plain text.
-- **Learning nugget**: research на Nmap/Gobuster flags → превръща се в конкретните UI опции по-горе
+Тикетът беше блокиращ за екипа, затова Радо го implementира изцяло вместо да чака — **но research nugget-ът (Nmap/Gobuster flag semantics) не е свършен от Денис**, само UI-то което тези флагове задвижват. Денис трябва да прегледа diff-а, разбере защо е направено така, и да довърши reasoning частта, иначе learning целта на тикета отпада.
+
+- Frontend: catalog on/off страница ([templates/catalog/index.html](../../NodeGuard/templates/catalog/index.html), [catalog/views.py](../../NodeGuard/catalog/views.py)), показваща `list_scanners()` + `is_available()` за всеки — реюзва pattern-а от scan-trigger dropdown-а (disabled + "не е инсталиран"); нов `catalog` app URL (`/catalog/`) + nav линк в `base.html`
+- Scan-trigger UI: Alpine `x-show` toggle-ва nmap `-sV`/`-A` checkboxes или gobuster wordlist upload според избрания scanner ([templates/scanners/scan_list.html](../../NodeGuard/templates/scanners/scan_list.html)) — вместо hardcoded defaults в `build_command`
+- **Архитектурната промяна от бележката по-горе е направена**: `BaseScanner.build_command(target, options: dict | None = None)` — всеки scanner (`demo`/`nmap`/`gobuster`) приема options; `Scan.options` (`JSONField`) пази избраните nmap флагове между HTTP request-а и async execution-а през huey worker-а
+- **Custom wordlist upload за gobuster**: `Scan.wordlist` `FileField` (`MEDIA_ROOT`/`MEDIA_URL` добавени в settings), validation във view-то (`.txt` extension, ≤2MB) преди `Scan` да се създаде — reject → error message, не crash, same pattern като target/scanner валидацията
+- **Verified с реален pipeline** (не само unit тестове): вдигнат tiny HTTP server в worker container-а с маркер файл, качен custom 2-word wordlist през браузъра (истински `<input type=file>`, не mock) → real gobuster scan намери точно маркера, пропусна decoy-а — доказва че upload-натият wordlist наистина стига до binary-я, не bundled `common.txt`-то. Аналогично `nmap -A` (без `-sV`) откри service banner (`SimpleHTTPServer 0.6`) — потвърждава че checkbox-ите наистина местят флаговете.
+- 12 нови теста (`CollectScanOptionsTests`, `CatalogIndexViewTests`, upload accept/reject cases) + `ruff`/`black` чисто, зелено и на bare host, и в Docker image-а
+- **Learning nugget — все още за Денис**: research-ът зад защо `-sV` vs `-A` и gobuster wordlist size trade-offs все още не е направен от него — UI-то само ги показва като опции

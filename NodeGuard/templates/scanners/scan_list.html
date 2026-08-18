@@ -6,10 +6,13 @@
 <h1 class="text-2xl font-bold mb-1">Scanners</h1>
 <p class="text-slate-400 text-sm mb-6">Enter a target, pick a scanner, and watch results stream in live.</p>
 
-<form method="post" action="{% url 'scanners:trigger' %}"
+<form method="post" action="{% url 'scanners:trigger' %}" enctype="multipart/form-data"
       class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-8"
-      x-data="{ available: true }"
-      x-init="$nextTick(() => { available = $refs.scanner.selectedOptions[0]?.dataset.available === 'true' })">
+      x-data="{ available: true, scanner: 'demo' }"
+      x-init="$nextTick(() => {
+          available = $refs.scanner.selectedOptions[0]?.dataset.available === 'true';
+          scanner = $refs.scanner.value;
+      })">
     {% csrf_token %}
     <div class="flex flex-wrap gap-4 items-end">
         <div class="flex-1 min-w-[16rem]">
@@ -21,7 +24,7 @@
         <div>
             <label class="block text-xs text-slate-400 mb-1" for="scanner">Scanner</label>
             <select id="scanner" name="scanner" x-ref="scanner"
-                    @change="available = $event.target.selectedOptions[0].dataset.available === 'true'"
+                    @change="available = $event.target.selectedOptions[0].dataset.available === 'true'; scanner = $event.target.value"
                     class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm
                            focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand">
                 {% for name, scanner in scanners.items %}
@@ -32,6 +35,22 @@
                 {% endfor %}
             </select>
         </div>
+
+        <div x-show="scanner === 'nmap'" x-cloak class="flex gap-3 items-center text-xs text-slate-300 pb-2.5">
+            <label class="flex items-center gap-1">
+                <input type="checkbox" name="nmap_sv" checked> -sV (service detection)
+            </label>
+            <label class="flex items-center gap-1">
+                <input type="checkbox" name="nmap_a"> -A (aggressive)
+            </label>
+        </div>
+
+        <div x-show="scanner === 'gobuster'" x-cloak>
+            <label class="block text-xs text-slate-400 mb-1" for="wordlist">Wordlist (.txt, optional — falls back to bundled)</label>
+            <input type="file" id="wordlist" name="wordlist" accept=".txt"
+                   class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs w-64">
+        </div>
+
         <button type="submit" :disabled="!available"
                 class="px-4 py-2 rounded-lg text-sm font-medium bg-brand-dark hover:bg-brand
                        disabled:opacity-40 disabled:cursor-not-allowed">

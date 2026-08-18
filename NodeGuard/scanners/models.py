@@ -21,6 +21,12 @@ class Scan(models.Model):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING
     )
+    # Scan-type flags (e.g. nmap -sV/-A) chosen in the trigger form. Stored
+    # here rather than passed straight into build_command() because the
+    # huey worker only receives scan_id — it has to reconstruct `options`
+    # from the row when the task actually runs.
+    options = models.JSONField(default=dict, blank=True)
+    wordlist = models.FileField(upload_to="wordlists/", blank=True, null=True)
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)

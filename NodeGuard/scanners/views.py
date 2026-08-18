@@ -5,6 +5,8 @@ from .models import Scan, Target
 from .registry import list_scanners
 from .tasks import run_scan
 
+MAX_WORDLIST_BYTES = 2 * 1024 * 1024  # user-uploaded gobuster wordlists
+
 
 def scan_list(request):
     context = {"scans": _recent_scans(), "scanners": list_scanners()}
@@ -28,11 +30,47 @@ def trigger_scan(request):
         elif not scanners[scanner_name].is_available():
             messages.error(request, f"'{scanner_name}' не е инсталиран на тази машина.")
         else:
-            target, _ = Target.objects.get_or_create(value=target_value)
-            scan = Scan.objects.create(target=target, scanner_name=scanner_name)
-            run_scan(scan.id)
+            options, wordlist, error = _collect_scan_options(request, scanner_name)
+            if error:
+                messages.error(request, error)
+            else:
+                target, _ = Target.objects.get_or_create(value=target_value)
+                scan = Scan.objects.create(
+                    target=target,
+                    scanner_name=scanner_name,
+                    options=options,
+                    wordlist=wordlist,
+                )
+                run_scan(scan.id)
 
     return redirect("scanners:list")
+
+
+def _collect_scan_options(request, scanner_name):
+    """Returns (options dict, wordlist file-or-None, error message-or-None).
+
+    Only the scanner actually selected gets to contribute options — a
+    gobuster wordlist submitted while "nmap" is selected is silently
+    ignored, not smuggled into the scan.
+    """
+    if scanner_name == "nmap":
+        options = {
+            "service_detection": "nmap_sv" in request.POST,
+            "aggressive": "nmap_a" in request.POST,
+        }
+        return options, None, None
+
+    if scanner_name == "gobuster":
+        wordlist = request.FILES.get("wordlist")
+        if wordlist is None:
+            return {}, None, None
+        if not wordlist.name.lower().endswith(".txt"):
+            return None, None, "Wordlist-ът трябва да е .txt файл."
+        if wordlist.size > MAX_WORDLIST_BYTES:
+            return None, None, "Wordlist-ът е твърде голям (макс. 2 MB)."
+        return {}, wordlist, None
+
+    return {}, None, None
 
 
 def _recent_scans():

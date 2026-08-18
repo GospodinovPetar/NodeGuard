@@ -4,15 +4,17 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from django.test import SimpleTestCase, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .base import Severity, TargetValidationError
-from .gobuster_scanner import GobusterScanner
+from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
 from .models import Scan, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
+from .views import MAX_WORDLIST_BYTES, _collect_scan_options
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -79,6 +81,22 @@ class NmapCommandTests(SimpleTestCase):
         command = NmapScanner().build_command("127.0.0.1")
 
         self.assertEqual(command, ["nmap", "-sV", "-oX", "-", "127.0.0.1"])
+
+    def test_no_options_behaves_like_default(self):
+        self.assertEqual(
+            NmapScanner().build_command("127.0.0.1", None),
+            NmapScanner().build_command("127.0.0.1"),
+        )
+
+    def test_aggressive_option_adds_dash_a(self):
+        command = NmapScanner().build_command("127.0.0.1", {"aggressive": True})
+
+        self.assertEqual(command, ["nmap", "-sV", "-A", "-oX", "-", "127.0.0.1"])
+
+    def test_service_detection_can_be_disabled(self):
+        command = NmapScanner().build_command("127.0.0.1", {"service_detection": False})
+
+        self.assertEqual(command, ["nmap", "-oX", "-", "127.0.0.1"])
 
 
 class NmapParseTests(SimpleTestCase):
@@ -164,6 +182,18 @@ class GobusterScannerTests(TestCase):
         command = self.scanner.build_command("https://example.com")
         self.assertIn("https://example.com", command)
 
+    def test_build_command_uses_bundled_wordlist_by_default(self):
+        command = self.scanner.build_command("example.com")
+        self.assertIn(str(WORDLIST_PATH), command)
+
+    def test_build_command_uses_custom_wordlist_when_given(self):
+        command = self.scanner.build_command(
+            "example.com", {"wordlist_path": "/tmp/custom.txt"}
+        )
+
+        self.assertIn("/tmp/custom.txt", command)
+        self.assertNotIn(str(WORDLIST_PATH), command)
+
     def test_parse_output_extracts_findings(self):
         raw = (
             "/admin                (Status: 200) [Size: 1234]\n"
@@ -244,3 +274,132 @@ class TriggerScanViewTests(TestCase):
         self.assertEqual(Scan.objects.count(), 0)
         messages = list(response.wsgi_request._messages)
         self.assertTrue(any("не е инсталиран" in str(m) for m in messages))
+
+    def test_gobuster_wordlist_upload_is_saved_on_the_scan(self):
+        # is_available() is stubbed and run_scan is a no-op: this test is
+        # about the view saving the upload correctly, not about a real
+        # gobuster binary being on PATH or hitting the network.
+        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=True))
+        upload = SimpleUploadedFile(
+            "custom.txt", b"admin\nlogin\n", content_type="text/plain"
+        )
+
+        with (
+            mock.patch(
+                "scanners.views.list_scanners",
+                return_value={"gobuster": fake_scanner},
+            ),
+            mock.patch("scanners.views.run_scan"),
+        ):
+            response = self.client.post(
+                reverse("scanners:trigger"),
+                {"target": "example.com", "scanner": "gobuster", "wordlist": upload},
+            )
+
+        self.assertRedirects(response, reverse("scanners:list"))
+        scan = Scan.objects.get()
+        self.assertTrue(scan.wordlist.name.endswith("custom.txt"))
+        scan.wordlist.delete(save=False)
+
+    def test_gobuster_rejected_wordlist_creates_no_scan(self):
+        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=True))
+        upload = SimpleUploadedFile("custom.csv", b"admin\n", content_type="text/csv")
+
+        with mock.patch(
+            "scanners.views.list_scanners", return_value={"gobuster": fake_scanner}
+        ):
+            response = self.client.post(
+                reverse("scanners:trigger"),
+                {"target": "example.com", "scanner": "gobuster", "wordlist": upload},
+            )
+
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any(".txt" in str(m) for m in messages))
+
+
+class CollectScanOptionsTests(SimpleTestCase):
+    """Unit-tests the trigger view's option parsing directly, so nmap/
+    gobuster-specific behavior doesn't depend on those tools actually being
+    installed (bare host vs. Docker image) the way TriggerScanViewTests'
+    end-to-end cases have to work around.
+    """
+
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def test_nmap_reads_checkbox_flags(self):
+        request = self.factory.post("/trigger/", {"nmap_a": "on"})
+
+        options, wordlist, error = _collect_scan_options(request, "nmap")
+
+        self.assertEqual(options, {"service_detection": False, "aggressive": True})
+        self.assertIsNone(wordlist)
+        self.assertIsNone(error)
+
+    def test_nmap_defaults_to_false_when_no_checkboxes_submitted(self):
+        request = self.factory.post("/trigger/", {})
+
+        options, _, _ = _collect_scan_options(request, "nmap")
+
+        self.assertEqual(options, {"service_detection": False, "aggressive": False})
+
+    def test_gobuster_without_upload_uses_bundled_wordlist(self):
+        request = self.factory.post("/trigger/", {})
+
+        options, wordlist, error = _collect_scan_options(request, "gobuster")
+
+        self.assertEqual((options, wordlist, error), ({}, None, None))
+
+    def test_gobuster_accepts_txt_upload_under_size_limit(self):
+        upload = SimpleUploadedFile(
+            "custom.txt", b"admin\nlogin\n", content_type="text/plain"
+        )
+        request = self.factory.post("/trigger/", {"wordlist": upload})
+
+        options, wordlist, error = _collect_scan_options(request, "gobuster")
+
+        self.assertEqual(options, {})
+        self.assertEqual(wordlist.name, "custom.txt")
+        self.assertIsNone(error)
+
+    def test_gobuster_rejects_non_txt_extension(self):
+        upload = SimpleUploadedFile("custom.csv", b"admin\n", content_type="text/csv")
+        request = self.factory.post("/trigger/", {"wordlist": upload})
+
+        options, wordlist, error = _collect_scan_options(request, "gobuster")
+
+        self.assertIsNone(options)
+        self.assertIsNone(wordlist)
+        self.assertIn(".txt", error)
+
+    def test_gobuster_rejects_oversized_upload(self):
+        upload = SimpleUploadedFile(
+            "big.txt", b"x" * (MAX_WORDLIST_BYTES + 1), content_type="text/plain"
+        )
+        request = self.factory.post("/trigger/", {"wordlist": upload})
+
+        options, wordlist, error = _collect_scan_options(request, "gobuster")
+
+        self.assertIsNone(options)
+        self.assertIsNone(wordlist)
+        self.assertIn("голям", error)
+
+    def test_unknown_scanner_gets_empty_options(self):
+        request = self.factory.post("/trigger/", {})
+
+        result = _collect_scan_options(request, "demo")
+
+        self.assertEqual(result, ({}, None, None))
+
+
+class CatalogIndexViewTests(TestCase):
+    def test_lists_every_registered_scanner_with_availability(self):
+        response = self.client.get(reverse("catalog:index"))
+
+        self.assertEqual(response.status_code, 200)
+        for name in list_scanners():
+            self.assertContains(response, name)
+        # demo's binary is sys.executable, so it's always available — the
+        # "Enabled" badge should render at least once regardless of host.
+        self.assertContains(response, "Enabled")

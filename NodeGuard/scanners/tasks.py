@@ -18,7 +18,12 @@ def run_scan(scan_id: int) -> None:
     scan.save(update_fields=["status"])
 
     try:
-        command = scanner.build_command(scanner.validate_target(scan.target.value))
+        options = dict(scan.options or {})
+        if scan.wordlist:
+            options["wordlist_path"] = scan.wordlist.path
+        command = scanner.build_command(
+            scanner.validate_target(scan.target.value), options
+        )
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=600, check=False
         )
