@@ -18,7 +18,7 @@ def run_scan(scan_id: int) -> None:
     scan.save(update_fields=["status"])
 
     try:
-        command = scanner.build_command(scan.target)
+        command = scanner.build_command(scanner.validate_target(scan.target))
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=600, check=False
         )
