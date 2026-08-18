@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Recorded output of: nmap -sV -oX - 127.0.0.1
+     Trimmed to the elements parse_output actually reads. Replace with a real
+     capture if nmap's schema changes. -->
+<nmaprun scanner="nmap" args="nmap -sV -oX - 127.0.0.1" version="7.94">
+  <host>
+    <status state="up" reason="localhost-response"/>
+    <address addr="127.0.0.1" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="localhost" type="PTR"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="8.9p1 Ubuntu 3ubuntu0.4" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="23">
+        <state state="open" reason="syn-ack"/>
+        <service name="telnet" product="Linux telnetd" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="nginx" version="1.24.0" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="443">
+        <state state="closed" reason="conn-refused"/>
+        <service name="https" method="table"/>
+      </port>
+      <port protocol="tcp" portid="3306">
+        <state state="filtered" reason="no-response"/>
+        <service name="mysql" method="table"/>
+      </port>
+    </ports>
+  </host>
+  <runstats>
+    <finished time="1734500000" elapsed="1.42"/>
+    <hosts up="1" down="0" total="1"/>
+  </runstats>
+</nmaprun>
