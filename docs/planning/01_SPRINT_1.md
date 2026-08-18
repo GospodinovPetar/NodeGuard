@@ -16,9 +16,16 @@
 - [x] Catalog on/off toggle UI + scan-options dropdown (Денис — виж бележката по-долу)
 - [x] Custom wordlist upload за gobuster (Денис — виж бележката по-долу) — fallback към bundled `common.txt` ако няма upload
 
-## Архитектурна бележка: options за scanners
+## Архитектурна бележка: options за scanners ✅ done
 
-`BaseScanner.build_command(target)` в момента взима само target — gobuster wordlist-ът и nmap флаговете (`-sV`/`-A`) са hardcoded. За да не се превърне всеки нов option в one-off промяна на сигнатурата, `build_command` трябва да стане `build_command(target, options: dict)` — общ механизъм за всички tools (wordlist за gobuster, флагове за nmap, и т.н. занапред). Това е малка промяна в `scanners/base.py`/`tasks.py` (Петър/Рado координират, засяга и двата scanner-а), върху която се качва Денис-овата UI работа по-долу.
+`BaseScanner.build_command(target)` взимаше само target — gobuster wordlist-ът и nmap флаговете (`-sV`/`-A`) бяха hardcoded. Вместо one-off промяна на сигнатурата при всеки нов option, `build_command` стана `build_command(target, options: dict | None = None)` — общ механизъм за всички tools ([scanners/base.py](../../NodeGuard/scanners/base.py)).
+
+Направено от Радо (не Петър, както бележката първоначално очакваше — Петър беше зает с `feat/target_scan`, а промяната стана директна зависимост на Денис-овия тикет по-долу, така че Радо я взе заедно с него):
+
+- `NmapScanner`/`GobusterScanner`/`DemoScanner` всички приемат `options`, с backward-compatible default (`options=None` → същото поведение като преди)
+- `Scan.options` (`JSONField`, default `{}`) пази избраните nmap флагове/gobuster wordlist между HTTP request-а и async execution-а — `tasks.run_scan` не взима нищо друго освен `scan_id`, затова options трябва да се материализират на `Scan` модела, не да се подават директно през заявка
+- `scanners/tasks.py::run_scan` реконструира `options` dict от `scan.options` + `scan.wordlist.path` (ако има upload) преди `build_command`
+- Verified с реален pipeline (не само unit тестове) — виж бележката в Радо/Денис секциите по-долу
 
 ## Задачи
 
