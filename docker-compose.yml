@@ -14,3 +14,4 @@ services:
       - ./NodeGuard:/app
     depends_on:
       - web
+    restart: unless-stopped
