@@ -1,37 +1,41 @@
+{% load scan_extras %}
 <table class="w-full text-left text-sm">
-    <thead class="text-slate-400">
+    <thead class="text-slate-400 bg-slate-900/60">
         <tr>
-            <th class="py-2">#</th>
-            <th>Target</th>
-            <th>Scanner</th>
-            <th>Status</th>
-            <th>Findings</th>
+            <th class="px-4 py-2 w-12">#</th>
+            <th class="px-4 py-2">Target</th>
+            <th class="px-4 py-2">Scanner</th>
+            <th class="px-4 py-2">Status</th>
+            <th class="px-4 py-2">Findings</th>
         </tr>
     </thead>
     <tbody>
         {% for scan in scans %}
-        <tr class="border-t border-slate-800">
-            <td class="py-2">{{ scan.id }}</td>
-            <td>{{ scan.target }}</td>
-            <td>{{ scan.scanner_name }}</td>
-            <td>
-                <span class="px-2 py-0.5 rounded text-xs
-                    {% if scan.status == 'done' %}bg-emerald-900 text-emerald-300
-                    {% elif scan.status == 'failed' %}bg-red-900 text-red-300
-                    {% elif scan.status == 'running' %}bg-amber-900 text-amber-300
-                    {% else %}bg-slate-800 text-slate-300{% endif %}">
-                    {{ scan.status }}
-                </span>
+        <tr class="border-t border-slate-800 align-top">
+            <td class="px-4 py-3 text-slate-500">{{ scan.id }}</td>
+            <td class="px-4 py-3 font-mono">{{ scan.target }}</td>
+            <td class="px-4 py-3">{{ scan.scanner_name }}</td>
+            <td class="px-4 py-3">
+                <span class="px-2 py-0.5 rounded text-xs {{ scan.status|status_classes }}">{{ scan.status }}</span>
             </td>
-            <td>
+            <td class="px-4 py-3">
                 {% for finding in scan.findings.all %}
-                <div class="text-slate-400">[{{ finding.severity }}] {{ finding.message }}</div>
+                <div class="flex items-start gap-2 mb-1">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
+                    <span class="text-slate-300">{{ finding.message }}</span>
+                </div>
+                {% empty %}
+                {% if scan.status == 'done' %}
+                <span class="text-slate-500">No findings.</span>
+                {% elif scan.status == 'failed' %}{% else %}
+                <span class="text-slate-500">…</span>
+                {% endif %}
                 {% endfor %}
-                {% if scan.error %}<div class="text-red-400">{{ scan.error }}</div>{% endif %}
+                {% if scan.error %}<div class="text-red-400 text-xs mt-1">{{ scan.error }}</div>{% endif %}
             </td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="py-4 text-slate-500">Няма scans още.</td></tr>
+        <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">No scans yet.</td></tr>
         {% endfor %}
     </tbody>
 </table>

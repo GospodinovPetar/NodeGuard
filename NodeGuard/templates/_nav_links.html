@@ -1,0 +1,13 @@
+{% comment %}Nav links, shared by the desktop bar and the mobile menu. `ns` is the active namespace.{% endcomment %}
+<a href="{% url 'dashboard:index' %}"
+   class="px-3 py-2 rounded-md text-sm font-medium {% if ns == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-400 hover:text-white hover:bg-slate-800/60{% endif %}">
+    Dashboard
+</a>
+<a href="{% url 'scanners:list' %}"
+   class="px-3 py-2 rounded-md text-sm font-medium {% if ns == 'scanners' %}bg-slate-800 text-white{% else %}text-slate-400 hover:text-white hover:bg-slate-800/60{% endif %}">
+    Scanners
+</a>
+<a href="{% url 'catalog:index' %}"
+   class="px-3 py-2 rounded-md text-sm font-medium {% if ns == 'catalog' %}bg-slate-800 text-white{% else %}text-slate-400 hover:text-white hover:bg-slate-800/60{% endif %}">
+    Catalog
+</a>
