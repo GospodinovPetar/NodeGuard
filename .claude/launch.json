@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nodeguard-dev",
+      "runtimeExecutable": "C:/Users/kurku/Desktop/NodeGuard/.venv/Scripts/python.exe",
+      "runtimeArgs": ["C:/Users/kurku/Desktop/NodeGuard/NodeGuard/manage.py", "runserver", "8000"],
+      "port": 8000
+    }
+  ]
+}

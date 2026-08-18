@@ -1,31 +1,57 @@
 {% extends "base.html" %}
 
-{% block content %}
-<h1 class="text-2xl font-bold mb-4">Scans</h1>
+{% block title %}Scanners — NodeGuard{% endblock %}
 
-<form method="post" action="{% url 'scanners:trigger' %}" class="mb-6 flex gap-2 items-end">
+{% block content %}
+<h1 class="text-2xl font-bold mb-1">Scanners</h1>
+<p class="text-slate-400 text-sm mb-6">Enter a target, pick a scanner, and watch results stream in live.</p>
+
+<form method="post" action="{% url 'scanners:trigger' %}"
+      class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-8"
+      x-data="{ available: true }"
+      x-init="$nextTick(() => { available = $refs.scanner.selectedOptions[0]?.dataset.available === 'true' })">
     {% csrf_token %}
-    <div>
-        <label class="block text-xs text-slate-400 mb-1" for="target">Target</label>
-        <input type="text" id="target" name="target" placeholder="127.0.0.1 или http://host"
-               class="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm w-64" required>
+    <div class="flex flex-wrap gap-4 items-end">
+        <div class="flex-1 min-w-[16rem]">
+            <label class="block text-xs text-slate-400 mb-1" for="target">Target</label>
+            <input type="text" id="target" name="target" placeholder="127.0.0.1  ·  scanme.nmap.org  ·  http://host"
+                   class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono
+                          focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand" required>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-400 mb-1" for="scanner">Scanner</label>
+            <select id="scanner" name="scanner" x-ref="scanner"
+                    @change="available = $event.target.selectedOptions[0].dataset.available === 'true'"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand">
+                {% for name, scanner in scanners.items %}
+                <option value="{{ name }}" data-available="{{ scanner.is_available|yesno:'true,false' }}"
+                        {% if not scanner.is_available %}disabled{% endif %}>
+                    {{ name }}{% if not scanner.is_available %} — not installed{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" :disabled="!available"
+                class="px-4 py-2 rounded-lg text-sm font-medium bg-brand-dark hover:bg-brand
+                       disabled:opacity-40 disabled:cursor-not-allowed">
+            Trigger scan
+        </button>
     </div>
-    <div>
-        <label class="block text-xs text-slate-400 mb-1" for="scanner">Scanner</label>
-        <select id="scanner" name="scanner" class="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm">
-            {% for name, scanner in scanners.items %}
-            <option value="{{ name }}" {% if not scanner.is_available %}disabled{% endif %}>
-                {{ name }}{% if not scanner.is_available %} (не е инсталиран){% endif %}
-            </option>
-            {% endfor %}
-        </select>
-    </div>
-    <button type="submit" class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">
-        Trigger scan
-    </button>
+    <p x-show="!available" x-cloak class="text-xs text-amber-400 mt-3">
+        This tool's binary isn't installed on the machine running NodeGuard. Install it or use the Docker image.
+    </p>
 </form>
 
+<div class="flex items-center justify-between mb-3">
+    <h2 class="font-semibold">Recent scans</h2>
+    <span class="text-xs text-slate-500 flex items-center gap-1.5">
+        <span class="h-2 w-2 rounded-full bg-brand animate-pulse"></span> live · refreshes every 2s
+    </span>
+</div>
+
 <div id="scan-table"
+     class="rounded-xl border border-slate-800 overflow-hidden"
      hx-get="{% url 'scanners:rows' %}"
      hx-trigger="every 2s"
      hx-swap="innerHTML">

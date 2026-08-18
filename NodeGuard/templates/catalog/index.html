@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Catalog — NodeGuard{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold">Tool catalog</h1>
+    <p class="text-slate-400 text-sm mt-1">
+        Every registered scanner and whether its binary is installed on this machine.
+        <span class="text-slate-300">{{ available_count }}/{{ total_count }} available.</span>
+    </p>
+</div>
+
+<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"
+     x-data="{
+        enabled: JSON.parse(localStorage.getItem('nodeguard.tools') || '{}'),
+        toggle(name) { this.enabled[name] = !this.isOn(name); this.save(); },
+        isOn(name) { return this.enabled[name] !== false; },
+        save() { localStorage.setItem('nodeguard.tools', JSON.stringify(this.enabled)); }
+     }">
+    {% for tool in statuses %}
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 flex flex-col"
+         :class="isOn('{{ tool.name }}') ? '' : 'opacity-60'">
+        <div class="flex items-start justify-between">
+            <div>
+                <h2 class="font-semibold text-lg capitalize">{{ tool.name }}</h2>
+                <p class="font-mono text-xs text-slate-500 mt-0.5">{{ tool.binary_name }}</p>
+            </div>
+            {% if tool.available %}
+            <span class="flex items-center gap-1.5 text-xs text-emerald-400 shrink-0">
+                <span class="h-2 w-2 rounded-full bg-emerald-400"></span> installed
+            </span>
+            {% else %}
+            <span class="flex items-center gap-1.5 text-xs text-slate-500 shrink-0">
+                <span class="h-2 w-2 rounded-full bg-slate-600"></span> not installed
+            </span>
+            {% endif %}
+        </div>
+
+        <p class="text-xs text-slate-400 mt-3 flex-1">
+            {% if tool.available %}
+            Detected at <span class="font-mono break-all">{{ tool.path }}</span>
+            {% else %}
+            Binary not found on <code class="font-mono">PATH</code>. Install it locally or run the Docker image, which bakes the tools in.
+            {% endif %}
+        </p>
+
+        <div class="flex items-center justify-between mt-4 pt-4 border-t border-slate-800">
+            <span class="text-xs text-slate-400" x-text="isOn('{{ tool.name }}') ? 'Enabled' : 'Disabled'"></span>
+            <button type="button" @click="toggle('{{ tool.name }}')" role="switch"
+                    :aria-checked="isOn('{{ tool.name }}')"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+                    :class="isOn('{{ tool.name }}') ? 'bg-brand-dark' : 'bg-slate-700'">
+                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                      :class="isOn('{{ tool.name }}') ? 'translate-x-6' : 'translate-x-1'"></span>
+            </button>
+        </div>
+    </div>
+    {% empty %}
+    <p class="text-slate-500">No scanners registered.</p>
+    {% endfor %}
+</div>
+
+<p class="text-xs text-slate-600 mt-6">
+    Toggles are stored in your browser for now — they mark which tools your team surfaces in the console.
+    Server-side gating lands with the catalog model in a later sprint.
+</p>
+{% endblock %}
