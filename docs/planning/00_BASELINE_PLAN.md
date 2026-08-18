@@ -26,7 +26,7 @@
 - **Frontend**: няма React, няма npm/webpack. Tailwind е закачен през Play CDN script tag — нулев build step, добро за local dev. За production compile трябва standalone Tailwind CLI (виж `04_BACKLOG.md`).
 - **HTMX + Alpine**: закачени през CDN в `templates/base.html`. Ще се ползват от Sprint 1 нататък за partial updates (напр. live scan progress) без пълен page reload.
 - **Apps структура**: `scanners` (BaseScanner + конкретните tool wrappers), `catalog` (App Store toggle + tool registry), `dashboard` (начална страница, графики, PDF export). Моделите (`Scan`, `ScanResult`, `Target`, `Vulnerability`) идват в Sprint 1/2, не в baseline.
-- **Docker**: `docker-compose.yml` bind-mount-ва `./NodeGuard` в контейнера — код промените се отразяват без rebuild, `db.sqlite3` живее на host-а (gitignored).
+- **Docker**: `docker-compose.yml` bind-mount-ва `./NodeGuard` в контейнера — код промените се отразяват без rebuild, `db.sqlite3` живее на host-а (gitignored). Image-ът вече идва с **nmap + gobuster preinstalled** (виж по-долу) — `docker compose up` = нулев tool setup.
 - **CI**: `docker-build` job-ът само проверява че image-ът се build-ва успешно (без push към registry за момента).
 
 ## Scalable архитектура (добавено след първоначалния baseline)
@@ -41,6 +41,18 @@
 - **`/scanners/` страница** — trigger бутон + HTMX polling (`hx-trigger="every 2s"`) на partial view, доказва live async update без page reload и без websockets/SSE инфраструктура.
 
 Sprint 1 бележка: Rado/Petar вече не пишат `BaseScanner`/registry от нулата — те implement-ват `NmapScanner`/`GobusterScanner` върху вече установения pattern (по-фокусирано learning: parsing + subprocess за конкретен tool, не design на plumbing-а).
+
+## Tool installation — решение след ревизия (без per-OS install scripts)
+
+Първоначален подход беше `setup.ps1` (Windows-only, winget) — **отхвърлен**: означава отделен install script за всяка комбинация OS × tool, не scale-ва (Sprint 3 добавя Nikto, backlog добавя nuclei/sqlmap/ffuf...). `BaseScanner.is_available()` (`shutil.which`) вече е достатъчен runtime detection механизъм — не ни трябва да "гарантираме" install, само да го засечем gracefully.
+
+Вместо това:
+
+- **Docker path (препоръчан)**: `Dockerfile` вече bake-ва nmap (apt) + gobuster (prebuilt release binary от GitHub, arch-aware amd64/arm64) директно в image-а. `docker compose up` = zero setup, работи out-of-the-box за нетехническия персонал (QA/мениджъри), точно според original UX целта.
+- **Local venv path** (за екипа, докато кодират): tool-овете се инсталират ръчно, както предпочете всеки (brew/apt/winget/choco/manual) — README линква официалните install страници. Detection логиката е еднаква и за двата пътя.
+- `setup.ps1` **изтрит**. Добавянето на нов tool в бъдеще = ред в `Dockerfile`, не нов script per OS.
+
+Проверено с реален (не canned) test: качен tiny HTTP server + реален `gobuster dir` scan през worker container-а → намери всички 3 real файла (`admin`/`login`/`backup`, status 200) — доказва пълния async pipeline с истински binary, не само unit test с fixture text.
 
 ## Проверено локално
 

@@ -6,4 +6,6 @@ class ScannersConfig(AppConfig):
     name = "scanners"
 
     def ready(self):
-        from . import demo_scanner, nmap_scanner  # noqa: F401  register via decorator
+        from . import demo_scanner  # noqa: F401  registers via decorator
+        from . import gobuster_scanner  # noqa: F401  registers via decorator
+        from . import nmap_scanner  # noqa: F401  registers via decorator

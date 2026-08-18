@@ -4,9 +4,11 @@ import unittest
 from pathlib import Path
 
 from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 
 from .base import Severity, TargetValidationError
-from .models import Scan
+from .gobuster_scanner import GobusterScanner
+from .models import Scan, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
@@ -17,6 +19,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class RegistryTests(TestCase):
     def test_demo_scanner_is_registered(self):
         self.assertIn("demo", list_scanners())
+
+    def test_gobuster_scanner_is_registered(self):
+        self.assertIn("gobuster", list_scanners())
 
     def test_demo_scanner_is_available(self):
         self.assertTrue(get_scanner("demo").is_available())
@@ -135,9 +140,46 @@ class NmapLiveTests(SimpleTestCase):
             self.assertIsInstance(finding.severity, Severity)
 
 
+class TargetModelTests(TestCase):
+    def test_str_is_the_value(self):
+        target = Target.objects.create(value="127.0.0.1")
+        self.assertEqual(str(target), "127.0.0.1")
+
+    def test_value_is_unique(self):
+        Target.objects.create(value="127.0.0.1")
+        with self.assertRaises(Exception):
+            Target.objects.create(value="127.0.0.1")
+
+
+class GobusterScannerTests(TestCase):
+    def setUp(self):
+        self.scanner = GobusterScanner()
+
+    def test_build_command_prefixes_scheme(self):
+        command = self.scanner.build_command("example.com")
+        self.assertIn("http://example.com", command)
+
+    def test_build_command_keeps_existing_scheme(self):
+        command = self.scanner.build_command("https://example.com")
+        self.assertIn("https://example.com", command)
+
+    def test_parse_output_extracts_findings(self):
+        raw = (
+            "/admin                (Status: 200) [Size: 1234]\n"
+            "/login                (Status: 301) [Size: 0]\n"
+            "not a result line\n"
+        )
+        findings = self.scanner.parse_output(raw)
+
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(findings[0].severity.value, "low")
+        self.assertEqual(findings[1].severity.value, "info")
+
+
 class RunScanTests(TestCase):
     def test_run_scan_produces_a_finding(self):
-        scan = Scan.objects.create(target="127.0.0.1", scanner_name="demo")
+        target = Target.objects.create(value="127.0.0.1")
+        scan = Scan.objects.create(target=target, scanner_name="demo")
 
         run_scan(scan.id)
 
@@ -147,7 +189,8 @@ class RunScanTests(TestCase):
         self.assertEqual(scan.findings.first().severity, "info")
 
     def test_run_scan_rejects_a_malicious_target_without_running_the_tool(self):
-        scan = Scan.objects.create(target="127.0.0.1 -oN /tmp/pwn", scanner_name="demo")
+        target = Target.objects.create(value="127.0.0.1 -oN /tmp/pwn")
+        scan = Scan.objects.create(target=target, scanner_name="demo")
 
         run_scan(scan.id)
 
@@ -155,3 +198,29 @@ class RunScanTests(TestCase):
         self.assertEqual(scan.status, Scan.Status.FAILED)
         self.assertIn("refusing to scan target", scan.error)
         self.assertEqual(scan.findings.count(), 0)
+
+
+class TriggerScanViewTests(TestCase):
+    def test_valid_submission_creates_scan(self):
+        response = self.client.post(
+            reverse("scanners:trigger"), {"target": "127.0.0.1", "scanner": "demo"}
+        )
+
+        self.assertRedirects(response, reverse("scanners:list"))
+        self.assertEqual(Scan.objects.count(), 1)
+        self.assertEqual(Scan.objects.first().target.value, "127.0.0.1")
+
+    def test_missing_target_creates_no_scan(self):
+        self.client.post(reverse("scanners:trigger"), {"target": "", "scanner": "demo"})
+
+        self.assertEqual(Scan.objects.count(), 0)
+
+    def test_unavailable_scanner_creates_no_scan(self):
+        response = self.client.post(
+            reverse("scanners:trigger"),
+            {"target": "example.com", "scanner": "gobuster"},
+        )
+
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("gobuster" in str(m) for m in messages))

@@ -15,6 +15,13 @@
     </nav>
 
     <main class="p-6">
+        {% if messages %}
+        <ul class="mb-4 space-y-1">
+            {% for message in messages %}
+            <li class="px-3 py-2 rounded text-sm bg-red-900 text-red-200">{{ message }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 </body>
