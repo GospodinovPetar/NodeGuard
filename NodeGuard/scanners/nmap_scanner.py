@@ -36,8 +36,14 @@ class NmapScanner(BaseScanner):
 
     binary_name = "nmap"
 
-    def build_command(self, target: str) -> list[str]:
-        return [self.binary_name, "-sV", "-oX", "-", target]
+    def build_command(self, target: str, options: dict | None = None) -> list[str]:
+        options = options or {}
+        flags = []
+        if options.get("service_detection", True):
+            flags.append("-sV")
+        if options.get("aggressive"):
+            flags.append("-A")
+        return [self.binary_name, *flags, "-oX", "-", target]
 
     def parse_output(self, raw_output: str) -> list[Finding]:
         root = ET.fromstring(raw_output)

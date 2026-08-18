@@ -43,8 +43,13 @@ class BaseScanner(abc.ABC):
     binary_name: str
 
     @abc.abstractmethod
-    def build_command(self, target: str) -> list[str]:
-        """Return the argv list to pass to subprocess.run for this target."""
+    def build_command(self, target: str, options: dict | None = None) -> list[str]:
+        """Return the argv list to pass to subprocess.run for this target.
+
+        `options` is scanner-specific (e.g. nmap flag toggles, a gobuster
+        wordlist path) and always optional — every scanner must produce a
+        sane command with `options=None`.
+        """
 
     @abc.abstractmethod
     def parse_output(self, raw_output: str) -> list[Finding]:

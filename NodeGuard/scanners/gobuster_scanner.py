@@ -19,7 +19,9 @@ class GobusterScanner(BaseScanner):
 
     binary_name = "gobuster"
 
-    def build_command(self, target: str) -> list[str]:
+    def build_command(self, target: str, options: dict | None = None) -> list[str]:
+        options = options or {}
+        wordlist_path = options.get("wordlist_path", str(WORDLIST_PATH))
         url = target if target.startswith("http") else f"http://{target}"
         return [
             "gobuster",
@@ -27,7 +29,7 @@ class GobusterScanner(BaseScanner):
             "-u",
             url,
             "-w",
-            str(WORDLIST_PATH),
+            wordlist_path,
             "-q",
             "-t",
             "10",

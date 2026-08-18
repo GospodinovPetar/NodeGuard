@@ -15,7 +15,7 @@ class DemoScanner(BaseScanner):
 
     binary_name = sys.executable
 
-    def build_command(self, target: str) -> list[str]:
+    def build_command(self, target: str, options: dict | None = None) -> list[str]:
         return [sys.executable, "-c", f"print('demo scan of {target} ok')"]
 
     def parse_output(self, raw_output: str) -> list[Finding]:
