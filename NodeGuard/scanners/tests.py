@@ -2,6 +2,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
@@ -215,12 +216,31 @@ class TriggerScanViewTests(TestCase):
 
         self.assertEqual(Scan.objects.count(), 0)
 
-    def test_unavailable_scanner_creates_no_scan(self):
+    def test_unregistered_scanner_creates_no_scan(self):
         response = self.client.post(
             reverse("scanners:trigger"),
-            {"target": "example.com", "scanner": "gobuster"},
+            {"target": "example.com", "scanner": "not-a-real-scanner"},
         )
 
         self.assertEqual(Scan.objects.count(), 0)
         messages = list(response.wsgi_request._messages)
-        self.assertTrue(any("gobuster" in str(m) for m in messages))
+        self.assertTrue(any("Непознат scanner" in str(m) for m in messages))
+
+    def test_uninstalled_scanner_creates_no_scan(self):
+        # Which real tools are installed varies by machine (bare host vs. the
+        # Docker image with nmap/gobuster baked in), so this stubs
+        # is_available() instead of relying on gobuster actually being
+        # missing — that assumption broke the moment it got baked into the
+        # image and made this test flaky by environment.
+        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=False))
+        with mock.patch(
+            "scanners.views.list_scanners", return_value={"gobuster": fake_scanner}
+        ):
+            response = self.client.post(
+                reverse("scanners:trigger"),
+                {"target": "example.com", "scanner": "gobuster"},
+            )
+
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("не е инсталиран" in str(m) for m in messages))
