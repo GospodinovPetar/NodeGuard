@@ -9,10 +9,11 @@
 ## Definition of Done
 
 - [x] ~~**Prerequisite (Rado)**: `BaseScanner.build_command(target)` → `build_command(target, options: dict)`~~ — **вече направено в Sprint 1**, не в Sprint 2. Стана блокиращо за Денис-овия Sprint 1 тикет (scan-options UI), затова се качи там заедно с него. Виж архитектурната бележка в [01_SPRINT_1.md](01_SPRINT_1.md), която е маркирана done.
-- [ ] Severity classification — центрирана/tunable, вместо hardcoded per-scanner (виж бележката по-долу)
+- [x] Severity classification — центрирана/tunable, вместо hardcoded per-scanner (виж бележката по-долу)
 - [x] `SecurityProfile` model (Quick Scan / Deep Web Scan presets)
 - [x] Dashboard aggregation view на `/` — **target-centric** (виж бележката по-долу), не плосък scan feed
 - [x] Target detail страница — scan история per asset + overall severity
+- [x] **≥80% test coverage**, enforced в CI (реално 100%; прагът е под, не цел)
 - [ ] Severity pie chart + trend-over-time line chart (Chart.js) — Денис
 - [ ] PDF export (weasyprint) — Денис, **per target**, не per scan
 - [ ] Security Profile picker UI — Денис
@@ -37,17 +38,24 @@
 
 Това съзнателно **не** е finding-level dedup (open/fixed/reopened state) — това е Sprint 3 територия заедно със SARIF.
 
-## Бележка: severity вече не е "някой ден" проблем
+## Бележка: severity ruleset — ✅ направено
 
-Severity в момента е hardcoded вътре във всеки scanner поотделно: `GobusterScanner` (200→low, друго→info) и `NmapScanner` (`_RISKY_SERVICES` dict → high/medium, друго→info) — работи, но правилата не се виждат/тunват от едно място и всеки нов scanner ги преоткрива. Не сменяме модела (`Finding.severity` си остава), но извличаме класификацията в общо място, което Sprint 2 може да прегледа/подобри без да пипа parse_output-ите.
+Severity беше hardcoded вътре във всеки scanner поотделно: `GobusterScanner` (200→low, друго→info) и `NmapScanner` (`_RISKY_SERVICES` dict) — работеше, но правилата не се виждаха от едно място и всеки нов scanner ги преоткриваше. Сега политиката живее в [scanners/severity_rules.py](../../NodeGuard/scanners/severity_rules.py); моделът не е пипан (`Finding.severity` си остава string).
 
 ## Задачи
 
-### Петър — dashboard queries + severity ruleset ⚠️ dashboard частта е презаписана от Радо
+### Петър — severity ruleset + coverage gate ✅ done (dashboard частта е презаписана от Радо)
 
 - ✅ Dashboard aggregation queries — Петър ги написа, но първата версия беше scan-centric; Радо ги преработи на target-centric (виж архитектурната промяна по-горе). Stat cards / status breakdown / tools панелите му остават.
 - ✅ ~~Scan history list/detail страници~~ — направено от Радо като **target detail** страница, което тикетът вече казваше ("исторически изглед per target"), но не беше имплементирано така
-- ⏳ **Learning nugget (все още за Петър, не е взето)**: изважда severity логиката от `GobusterScanner`/`NmapScanner` в общ ruleset — принуждава го да разсъждава кое прави finding severe, не просто да го копира. Радо добави само `Severity.rank`/`worst()` ordering в [scanners/base.py](../../NodeGuard/scanners/base.py), защото агрегацията на target severity е невъзможна без наредба — **самите класификационни правила (кой service е HIGH и защо) остават негови**.
+- ✅ **Learning nugget: централизиран severity ruleset** — [scanners/severity_rules.py](../../NodeGuard/scanners/severity_rules.py). `parse_output()` вече не решава сам колко сериозен е даден finding; пита ruleset-а за `Rule` (severity + rule_id). Радо беше добавил само наредбата (`Severity.rank`/`worst()`) — самите класификационни правила бяха останалите.
+  - **nmap**: правилата се преместиха as-is (без промяна на поведение), но разделени по *причина* — `_CLEARTEXT_SERVICES` (telnet/rlogin/rsh/rexec/vnc/ftp — креденшълите минават в чист текст) срещу `_EXPOSED_INFRA_SERVICES` (SMB/RDP/MySQL/Postgres/Mongo/Redis — datastores, които не бива да гледат навън). Причината, не само стойността.
+  - **gobuster**: старото правило беше `200 → LOW, друго → INFO` с TODO коментар. Проблемът: третира `/images` и `/.env` еднакво, а те не са едно и също. Новото правило гледа **какво** е изложено: readable secret material (`.env`, `id_rsa`, `.htpasswd`, `credentials`) → **CRITICAL**; source/диагностика (`.git`, `backup`, `phpinfo.php`, `server-status`) → **HIGH**; admin интерфейси (`admin`, `wp-admin`, `phpmyadmin`, `console`) → **MEDIUM**; всичко друго сервирано → **LOW**.
+  - Ескалира се само 2xx: `.env`, който връща 403, е **обратното** на finding — пътят съществува, но не дава нищо. Редиректи/401/403 остават INFO.
+  - Verified с реален binary, не само fixture: вдигнат тестов сайт с `.env`/`.git`/`admin`/`images`, реален `gobuster dir` през worker container-а → `CRITICAL gobuster/exposed-secret .env`, `HIGH .git`, `MEDIUM admin`, `LOW images`. Dashboard-ът вече показва истински severity spread, вместо всичко да е INFO/LOW — което е и предусловие Денисовата pie chart да не излезе едноцветна.
+- ✅ **Coverage gate**: `coverage` в `requirements-dev.txt`, настройки в [NodeGuard/.coveragerc](../../NodeGuard/.coveragerc) (за да се държи еднакво локално и в CI), `coverage run` + `coverage report` стъпки в [ci.yml](../../.github/workflows/ci.yml). Прагът е `fail_under = 80` — **под, не цел**; реалното покритие е **100%** (86 теста). Проверено, че gate-ът реално чупи build при по-нисък процент, не просто минава.
+
+> ⚠️ Намерен pre-existing бъг (не в scope на този тикет, за Радо): `GobusterScanner` не override-ва `validate_target()`, така че base валидацията (host/IP/CIDR) отхвърля всеки target с порт или схема — `example.com:8080` и `http://example.com` дават `refusing to scan target`, въпреки че placeholder-ът във формата рекламира `http://host` и `build_command` умее да сглобява схема. Docstring-ът на `BaseScanner.validate_target` дори казва „Override in scanners whose targets aren't hosts (e.g. gobuster takes a URL)" — просто не е направено.
 
 ### Радо — options generalization + Security Profiles
 
@@ -63,7 +71,7 @@ Severity в момента е hardcoded вътре във всеки scanner п�
   - `Target.latest_scans()` / `current_findings()` / `current_severity()` — правилото "последен scan per scanner"
   - `/` подрежда targets worst-first; `/scanners/targets/<pk>/` показва current findings + пълна история с `current`/`superseded` маркери
   - Бонус fix намерен при реален преглед в браузъра: "Findings by severity" панелът броеше **всички** findings някога, така че dashboard-ът показваше `High: 1`, докато нито един target не беше High. Сега брои само current findings — иначе Денисовата pie chart щеше да наследи същата грешка.
-- ⏳ Ревю на Петровия severity ruleset — блокирано, Петър още не го е написал
+- ⏳ Ревю на Петровия severity ruleset — **отблокирано**, [scanners/severity_rules.py](../../NodeGuard/scanners/severity_rules.py) е готов. Конкретно за ревю: (1) `.env`/`id_rsa` като CRITICAL прекалено ли е, или е точно; (2) Redis/MongoDB стоят MEDIUM — по подразбиране са без auth, аргумент за HIGH има; (3) списъците с пътища са малки и вързани към bundled `common.txt` — при по-голям wordlist ще искат разширяване или pattern matching (`*.sql`, `*.bak`) вместо точно съвпадение.
 
 ### Денис — PDF export + charts + profile picker
 
