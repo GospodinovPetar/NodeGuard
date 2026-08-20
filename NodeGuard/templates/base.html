@@ -35,7 +35,7 @@
                 </div>
 
                 <div class="hidden sm:flex items-center gap-1">
-                    {% include "_nav_links.html" with ns=ns %}
+                    {% include "_nav_links.html" %}
                 </div>
 
                 <button type="button" class="sm:hidden text-slate-300"
@@ -47,7 +47,7 @@
             </div>
 
             <div class="sm:hidden pb-4 flex flex-col gap-1" x-show="open" x-cloak>
-                {% include "_nav_links.html" with ns=ns %}
+                {% include "_nav_links.html" %}
             </div>
         </div>
     </nav>

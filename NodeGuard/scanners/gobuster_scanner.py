@@ -28,7 +28,7 @@ class GobusterScanner(BaseScanner):
         wordlist_path = options.get("wordlist_path", str(WORDLIST_PATH))
         url = target if target.startswith("http") else f"http://{target}"
         return [
-            "gobuster",
+            self.binary_name,
             "dir",
             "-u",
             url,
@@ -47,12 +47,5 @@ class GobusterScanner(BaseScanner):
                 continue
             path, status = match.group(1), int(match.group(2))
             rule = severity_rules.discovered_path(path, status)
-            findings.append(
-                Finding(
-                    rule_id=rule.rule_id,
-                    message=f"{path} (Status: {status})",
-                    severity=rule.severity,
-                    raw=line,
-                )
-            )
+            findings.append(rule.finding(f"{path} (Status: {status})", raw=line))
         return findings

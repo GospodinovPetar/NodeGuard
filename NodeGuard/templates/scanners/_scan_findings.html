@@ -1,0 +1,13 @@
+{% for finding in scan.findings.all %}
+<div class="flex items-start gap-2 mb-1">
+    {% include "scanners/_severity_badge.html" with severity=finding.severity %}
+    <span class="text-slate-300 text-sm">{{ finding.message }}</span>
+</div>
+{% empty %}
+{% if scan.status == 'done' %}
+<span class="text-slate-500 text-sm">No findings.</span>
+{% elif scan.status != 'failed' %}
+<span class="text-slate-500 text-sm">…</span>
+{% endif %}
+{% endfor %}
+{% if scan.error %}<div class="text-red-400 text-xs mt-1">{{ scan.error }}</div>{% endif %}

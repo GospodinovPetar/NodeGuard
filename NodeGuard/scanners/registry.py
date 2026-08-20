@@ -46,7 +46,3 @@ def tool_status() -> list[ToolStatus]:
         )
         for name, scanner in sorted(list_scanners().items())
     ]
-
-
-def available_scanners() -> list[str]:
-    return [status.name for status in tool_status() if status.available]

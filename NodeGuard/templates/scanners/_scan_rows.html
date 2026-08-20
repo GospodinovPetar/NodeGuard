@@ -22,19 +22,7 @@
                 <span class="px-2 py-0.5 rounded text-xs {{ scan.status|status_classes }}">{{ scan.status }}</span>
             </td>
             <td class="px-4 py-3">
-                {% for finding in scan.findings.all %}
-                <div class="flex items-start gap-2 mb-1">
-                    <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
-                    <span class="text-slate-300">{{ finding.message }}</span>
-                </div>
-                {% empty %}
-                {% if scan.status == 'done' %}
-                <span class="text-slate-500">No findings.</span>
-                {% elif scan.status == 'failed' %}{% else %}
-                <span class="text-slate-500">…</span>
-                {% endif %}
-                {% endfor %}
-                {% if scan.error %}<div class="text-red-400 text-xs mt-1">{{ scan.error }}</div>{% endif %}
+                {% include "scanners/_scan_findings.html" with scan=scan %}
             </td>
         </tr>
         {% empty %}

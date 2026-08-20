@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import dataclasses
 
-from .base import Severity
+from .base import Finding, Severity
 
 
 @dataclasses.dataclass(frozen=True)
 class Rule:
     rule_id: str
     severity: Severity
+
+    def finding(self, message: str, raw: str = "") -> Finding:
+        return Finding(
+            rule_id=self.rule_id, message=message, severity=self.severity, raw=raw
+        )
 
 
 _CLEARTEXT_SERVICES = {

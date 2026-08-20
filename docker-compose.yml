@@ -1,11 +1,20 @@
 services:
+  migrate:
+    build: .
+    command: python manage.py migrate --noinput
+    volumes:
+      - ./NodeGuard:/app
+
   web:
     build: .
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - ./NodeGuard:/app
     ports:
       - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build: .
@@ -13,5 +22,6 @@ services:
     volumes:
       - ./NodeGuard:/app
     depends_on:
-      - web
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped

@@ -73,9 +73,4 @@ class NmapScanner(BaseScanner):
         if product:
             message = f"{message} ({product})"
 
-        return Finding(
-            rule_id=rule.rule_id,
-            message=message,
-            severity=rule.severity,
-            raw=ET.tostring(port, encoding="unicode").strip(),
-        )
+        return rule.finding(message, raw=ET.tostring(port, encoding="unicode").strip())
