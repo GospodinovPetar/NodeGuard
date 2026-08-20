@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
-from .models import Scan, SecurityProfile, Target
+from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
@@ -484,3 +484,142 @@ class SecurityProfileTests(TestCase):
         profile = SecurityProfile.objects.create(name="Demo run", scanner_name="demo")
 
         self.assertTrue(profile.is_available())
+
+
+class SeverityOrderingTests(SimpleTestCase):
+    def test_rank_orders_critical_before_info(self):
+        self.assertLess(Severity.CRITICAL.rank, Severity.INFO.rank)
+        ranks = [s.rank for s in Severity]
+        self.assertEqual(ranks, sorted(ranks))
+
+    def test_parse_is_total_for_unknown_values(self):
+        self.assertEqual(Severity.parse("HIGH"), Severity.HIGH)
+        self.assertIsNone(Severity.parse("bogus"))
+
+    def test_worst_picks_the_most_serious(self):
+        self.assertEqual(Severity.worst(["info", "high", "low"]), Severity.HIGH)
+
+    def test_worst_ignores_unknown_and_empty(self):
+        self.assertEqual(Severity.worst(["bogus", "low"]), Severity.LOW)
+        self.assertIsNone(Severity.worst([]))
+        self.assertIsNone(Severity.worst(["bogus"]))
+
+
+class TargetAggregationTests(TestCase):
+    def setUp(self):
+        self.target = Target.objects.create(value="10.0.0.5")
+
+    def _scan(self, scanner_name, severities, status=Scan.Status.DONE):
+        scan = Scan.objects.create(
+            target=self.target, scanner_name=scanner_name, status=status
+        )
+        for severity in severities:
+            Finding.objects.create(
+                scan=scan, rule_id="r", message="m", severity=severity
+            )
+        return scan
+
+    def test_no_scans_means_no_severity(self):
+        self.assertIsNone(self.target.current_severity())
+        self.assertEqual(self.target.latest_scans(), [])
+
+    def test_severity_is_the_worst_current_finding(self):
+        self._scan("nmap", ["info", "high", "low"])
+
+        self.assertEqual(self.target.current_severity(), "high")
+
+    def test_rescanning_clears_a_fixed_finding(self):
+        # The whole point of scoping to latest_scans(): fix telnet, rescan,
+        # and the target must stop reporting high.
+        self._scan("nmap", ["high"])
+        self._scan("nmap", ["info"])
+
+        self.assertEqual(self.target.current_severity(), "info")
+        self.assertEqual(len(self.target.latest_scans()), 1)
+
+    def test_keeps_newest_result_from_each_scanner(self):
+        # A later nmap run must not discard gobuster's separate findings.
+        self._scan("gobuster", ["medium"])
+        self._scan("nmap", ["info"])
+
+        scanners = {s.scanner_name for s in self.target.latest_scans()}
+        self.assertEqual(scanners, {"nmap", "gobuster"})
+        self.assertEqual(self.target.current_severity(), "medium")
+
+    def test_unfinished_scans_do_not_count(self):
+        self._scan("nmap", ["critical"], status=Scan.Status.FAILED)
+        self._scan("nmap", ["low"])
+
+        self.assertEqual(self.target.current_severity(), "low")
+
+
+class TargetDetailViewTests(TestCase):
+    def test_shows_current_severity_and_marks_superseded_scans(self):
+        target = Target.objects.create(value="10.0.0.9")
+        old = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(
+            scan=old, rule_id="old", message="telnet open", severity="high"
+        )
+        new = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(
+            scan=new, rule_id="new", message="ssh only", severity="info"
+        )
+
+        response = self.client.get(reverse("scanners:target_detail", args=[target.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["current_severity"], "info")
+        self.assertEqual(response.context["current_scan_ids"], {new.id})
+        self.assertContains(response, "superseded")
+        # The fixed finding stays visible as history, just not as current.
+        self.assertContains(response, "telnet open")
+
+    def test_unknown_target_is_404(self):
+        response = self.client.get(reverse("scanners:target_detail", args=[9999]))
+
+        self.assertEqual(response.status_code, 404)
+
+
+class DashboardTargetsTests(TestCase):
+    def test_targets_are_listed_worst_first(self):
+        for value, severity in [("a.test", "low"), ("b.test", "critical")]:
+            target = Target.objects.create(value=value)
+            scan = Scan.objects.create(
+                target=target, scanner_name="nmap", status=Scan.Status.DONE
+            )
+            Finding.objects.create(
+                scan=scan, rule_id="r", message="m", severity=severity
+            )
+        Target.objects.create(value="unscanned.test")
+
+        response = self.client.get(reverse("dashboard:index"))
+        rows = response.context["targets"]
+
+        self.assertEqual(
+            [r["target"].value for r in rows],
+            ["b.test", "a.test", "unscanned.test"],
+        )
+        self.assertIsNone(rows[-1]["severity"])
+
+    def test_severity_breakdown_excludes_superseded_findings(self):
+        # Dashboard must not report a High that no target actually has.
+        target = Target.objects.create(value="fixed.test")
+        old = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(scan=old, rule_id="r", message="m", severity="high")
+        new = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(scan=new, rule_id="r", message="m", severity="info")
+
+        response = self.client.get(reverse("dashboard:index"))
+        counts = dict(response.context["severity_counts"])
+
+        self.assertEqual(counts["high"], 0)
+        self.assertEqual(counts["info"], 1)
+        self.assertEqual(response.context["current_findings_count"], 1)

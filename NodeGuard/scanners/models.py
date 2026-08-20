@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
 
+from .base import Severity
 from .registry import list_scanners
 
 
@@ -11,6 +12,34 @@ class Target(models.Model):
 
     def __str__(self) -> str:
         return self.value
+
+    def latest_scans(self) -> list["Scan"]:
+        """The newest completed scan for each scanner that has run here.
+
+        Not simply "the newest scan": nmap and gobuster answer different
+        questions, so taking only the single most recent run would silently
+        drop the other tool's results. One row per scanner, newest wins.
+
+        Done in Python because DISTINCT ON is Postgres-only and this is a
+        local SQLite tool — a target has a handful of scans, not thousands.
+        """
+        newest: dict[str, Scan] = {}
+        for scan in self.scans.filter(status=Scan.Status.DONE).order_by("-created_at"):
+            newest.setdefault(scan.scanner_name, scan)
+        return list(newest.values())
+
+    def current_findings(self) -> list["Finding"]:
+        """Findings that still reflect reality, i.e. from latest_scans().
+
+        Deliberately not every finding ever recorded: fixing a service and
+        rescanning would otherwise leave the old finding counted forever.
+        """
+        return [f for scan in self.latest_scans() for f in scan.findings.all()]
+
+    def current_severity(self) -> str | None:
+        """Worst severity across current_findings(), or None if clean."""
+        worst = Severity.worst(f.severity for f in self.current_findings())
+        return worst.value if worst else None
 
 
 class Scan(models.Model):
