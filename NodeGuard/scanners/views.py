@@ -1,5 +1,5 @@
 from django.contrib import messages
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 
 from .models import Scan, Target
 from .registry import list_scanners
@@ -44,6 +44,24 @@ def trigger_scan(request):
                 run_scan(scan.id)
 
     return redirect("scanners:list")
+
+
+def target_detail(request, pk):
+    """Everything known about one asset: its current risk, plus the full
+    scan history behind that verdict."""
+    target = get_object_or_404(
+        Target.objects.prefetch_related("scans__findings"), pk=pk
+    )
+    current_scan_ids = {scan.id for scan in target.latest_scans()}
+
+    context = {
+        "target": target,
+        "current_severity": target.current_severity(),
+        "current_findings": target.current_findings(),
+        "current_scan_ids": current_scan_ids,
+        "scans": target.scans.order_by("-created_at"),
+    }
+    return render(request, "scanners/target_detail.html", context)
 
 
 def _collect_scan_options(request, scanner_name):

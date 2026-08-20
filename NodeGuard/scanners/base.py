@@ -8,11 +8,40 @@ import shutil
 
 
 class Severity(enum.Enum):
+    """Members are declared most→least serious; `rank` depends on that order."""
+
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
     INFO = "info"
+
+    @property
+    def rank(self) -> int:
+        """0 = most serious.
+
+        Aggregating a target's severity means taking a max over findings, so
+        the ordering has to live with the enum instead of being re-declared
+        as a list wherever someone needs to sort.
+        """
+        return list(type(self)).index(self)
+
+    @classmethod
+    def parse(cls, value: str) -> Severity | None:
+        """Findings store severity as a plain string, so reading one back
+        out of the DB needs a total function — unknown values sort last
+        rather than raising."""
+        try:
+            return cls(str(value).lower())
+        except ValueError:
+            return None
+
+    @classmethod
+    def worst(cls, values) -> Severity | None:
+        """Most serious severity among `values` (strings or members)."""
+        parsed = [v if isinstance(v, cls) else cls.parse(v) for v in values]
+        present = [p for p in parsed if p is not None]
+        return min(present, key=lambda s: s.rank) if present else None
 
 
 @dataclasses.dataclass
@@ -41,6 +70,13 @@ class BaseScanner(abc.ABC):
 
     name: str
     binary_name: str
+
+    # Option keys a SecurityProfile is allowed to set. Empty by default so a
+    # scanner has to opt in explicitly: build_command() reads options into
+    # argv, and some keys are meant to be filled at runtime from validated
+    # input (gobuster's wordlist_path comes from an uploaded file), never
+    # from stored profile config.
+    profile_options: frozenset[str] = frozenset()
 
     @abc.abstractmethod
     def build_command(self, target: str, options: dict | None = None) -> list[str]:

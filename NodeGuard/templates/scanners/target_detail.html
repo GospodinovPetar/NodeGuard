@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% load scan_extras %}
+
+{% block title %}{{ target.value }} — NodeGuard{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="{% url 'dashboard:index' %}" class="text-slate-400 text-sm hover:text-white">← Targets</a>
+    <div class="flex items-center gap-3 mt-2">
+        <h1 class="text-2xl font-bold font-mono">{{ target.value }}</h1>
+        {% if current_severity %}
+        <span class="px-2 py-0.5 rounded text-xs uppercase font-medium {{ current_severity|severity_classes }}">{{ current_severity }}</span>
+        {% else %}
+        <span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-400">no findings</span>
+        {% endif %}
+    </div>
+    <p class="text-slate-400 text-sm mt-1">
+        Overall severity is the worst finding from the most recent completed scan
+        of <em>each</em> scanner — superseded scans stay below as history.
+    </p>
+</div>
+
+<!-- Current state -->
+<section class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-8">
+    <h2 class="font-semibold mb-4">Current findings</h2>
+    {% for finding in current_findings %}
+    <div class="flex items-start gap-2 mb-2">
+        <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
+        <div>
+            <div class="text-slate-200">{{ finding.message }}</div>
+            <div class="text-slate-500 text-xs font-mono">{{ finding.rule_id }} · {{ finding.scan.scanner_name }}</div>
+        </div>
+    </div>
+    {% empty %}
+    <p class="text-slate-500 text-sm">
+        Nothing outstanding. Either this target is clean or it hasn't finished a scan yet.
+    </p>
+    {% endfor %}
+</section>
+
+<!-- History -->
+<section>
+    <h2 class="font-semibold mb-4">Scan history</h2>
+    <div class="space-y-3">
+        {% for scan in scans %}
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+                <div class="flex items-center gap-3">
+                    <span class="text-slate-500 text-xs">#{{ scan.id }}</span>
+                    <span class="font-medium">{{ scan.scanner_name }}</span>
+                    <span class="px-2 py-0.5 rounded text-xs {{ scan.status|status_classes }}">{{ scan.status }}</span>
+                    {% if scan.id in current_scan_ids %}
+                    <span class="px-2 py-0.5 rounded text-xs bg-brand-dark/40 text-brand ring-1 ring-brand/30">current</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-500">superseded</span>
+                    {% endif %}
+                </div>
+                <span class="text-slate-500 text-xs">{{ scan.created_at|date:"d M Y H:i" }}</span>
+            </div>
+
+            {% if scan.options %}
+            <div class="text-slate-500 text-xs font-mono mt-2">options: {{ scan.options }}</div>
+            {% endif %}
+
+            <div class="mt-3">
+                {% for finding in scan.findings.all %}
+                <div class="flex items-start gap-2 mb-1">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
+                    <span class="text-slate-300 text-sm">{{ finding.message }}</span>
+                </div>
+                {% empty %}
+                {% if scan.status == 'done' %}
+                <span class="text-slate-500 text-sm">No findings.</span>
+                {% endif %}
+                {% endfor %}
+                {% if scan.error %}<div class="text-red-400 text-xs mt-1">{{ scan.error }}</div>{% endif %}
+            </div>
+        </div>
+        {% empty %}
+        <p class="text-slate-500 text-sm">No scans recorded for this target.</p>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

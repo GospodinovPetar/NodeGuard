@@ -7,7 +7,7 @@
 <div class="flex items-center justify-between mb-6">
     <div>
         <h1 class="text-2xl font-bold">Dashboard</h1>
-        <p class="text-slate-400 text-sm mt-1">Overview of scans, findings and installed tools.</p>
+        <p class="text-slate-400 text-sm mt-1">Scanned assets, ranked by current risk.</p>
     </div>
     <a href="{% url 'scanners:list' %}"
        class="bg-brand-dark hover:bg-brand px-4 py-2 rounded-lg text-sm font-medium">
@@ -18,15 +18,19 @@
 <!-- Stat cards -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <div class="text-3xl font-bold">{{ total_targets }}</div>
+        <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">Targets</div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
         <div class="text-3xl font-bold">{{ total_scans }}</div>
         <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">Total scans</div>
     </div>
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-        <div class="text-3xl font-bold">{{ total_findings }}</div>
-        <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">Findings</div>
+        <div class="text-3xl font-bold">{{ current_findings_count }}</div>
+        <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">Open findings</div>
     </div>
     {% for status, count in status_counts %}
-    {% if status == 'running' or status == 'failed' %}
+    {% if status == 'running' %}
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
         <div class="text-3xl font-bold">{{ count }}</div>
         <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">{{ status }}</div>
@@ -38,7 +42,8 @@
 <div class="grid lg:grid-cols-3 gap-6">
     <!-- Findings by severity -->
     <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-        <h2 class="font-semibold mb-4">Findings by severity</h2>
+        <h2 class="font-semibold mb-1">Open findings by severity</h2>
+        <p class="text-xs text-slate-500 mb-4">Latest scan per scanner; superseded results excluded.</p>
         <ul class="space-y-2">
             {% for severity, count in severity_counts %}
             <li class="flex items-center justify-between">
@@ -90,37 +95,44 @@
     </section>
 </div>
 
-<!-- Recent scans -->
+<!-- Targets, worst first -->
 <section class="mt-8">
     <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold">Recent scans</h2>
-        <a href="{% url 'scanners:list' %}" class="text-brand text-sm hover:underline">View all →</a>
+        <h2 class="font-semibold">Targets</h2>
+        <a href="{% url 'scanners:list' %}" class="text-brand text-sm hover:underline">Live scan feed →</a>
     </div>
     <div class="rounded-xl border border-slate-800 overflow-hidden">
         <table class="w-full text-left text-sm">
             <thead class="text-slate-400 bg-slate-900/60">
                 <tr>
-                    <th class="px-4 py-2">#</th>
                     <th class="px-4 py-2">Target</th>
-                    <th class="px-4 py-2">Scanner</th>
-                    <th class="px-4 py-2">Status</th>
-                    <th class="px-4 py-2 text-right">Findings</th>
+                    <th class="px-4 py-2">Current severity</th>
+                    <th class="px-4 py-2 text-right">Scans</th>
+                    <th class="px-4 py-2">Last scanned</th>
                 </tr>
             </thead>
             <tbody>
-                {% for scan in recent_scans %}
-                <tr class="border-t border-slate-800">
-                    <td class="px-4 py-2 text-slate-500">{{ scan.id }}</td>
-                    <td class="px-4 py-2 font-mono">{{ scan.target }}</td>
-                    <td class="px-4 py-2">{{ scan.scanner_name }}</td>
-                    <td class="px-4 py-2">
-                        <span class="px-2 py-0.5 rounded text-xs {{ scan.status|status_classes }}">{{ scan.status }}</span>
+                {% for row in targets %}
+                <tr class="border-t border-slate-800 hover:bg-slate-900/40">
+                    <td class="px-4 py-2 font-mono">
+                        <a href="{% url 'scanners:target_detail' row.target.pk %}"
+                           class="text-brand hover:underline">{{ row.target.value }}</a>
                     </td>
-                    <td class="px-4 py-2 text-right tabular-nums">{{ scan.findings.count }}</td>
+                    <td class="px-4 py-2">
+                        {% if row.severity %}
+                        <span class="px-2 py-0.5 rounded text-xs uppercase font-medium {{ row.severity|severity_classes }}">{{ row.severity }}</span>
+                        {% else %}
+                        <span class="text-slate-500 text-xs">no findings</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-right tabular-nums">{{ row.scan_count }}</td>
+                    <td class="px-4 py-2 text-slate-400">
+                        {% if row.last_scan %}{{ row.last_scan.created_at|date:"d M Y H:i" }}{% else %}—{% endif %}
+                    </td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">
-                    No scans yet. <a href="{% url 'scanners:list' %}" class="text-brand hover:underline">Run your first scan →</a>
+                <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">
+                    No targets yet. <a href="{% url 'scanners:list' %}" class="text-brand hover:underline">Run your first scan →</a>
                 </td></tr>
                 {% endfor %}
             </tbody>

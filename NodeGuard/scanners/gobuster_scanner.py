@@ -18,6 +18,9 @@ class GobusterScanner(BaseScanner):
     """Directory brute-forcing via gobuster's `dir` mode."""
 
     binary_name = "gobuster"
+    # No profile_options: the only knob today is wordlist_path, which becomes
+    # a filesystem path in argv and is set per-scan from a validated upload.
+    # A profile must not be able to point it at an arbitrary file.
 
     def build_command(self, target: str, options: dict | None = None) -> list[str]:
         options = options or {}

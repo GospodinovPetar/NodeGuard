@@ -4,13 +4,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
-from .models import Scan, Target
+from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
@@ -406,3 +407,219 @@ class CatalogIndexViewTests(TestCase):
         available = sum(1 for s in statuses if s.available)
         self.assertContains(response, f"{available}/{len(statuses)} available")
         self.assertContains(response, "installed")
+
+
+class SecurityProfileTests(TestCase):
+    def test_builtin_profiles_are_seeded_by_migration(self):
+        slugs = set(SecurityProfile.objects.values_list("slug", flat=True))
+
+        self.assertIn("quick-scan", slugs)
+        self.assertIn("deep-web-scan", slugs)
+
+    def test_builtin_profiles_reference_registered_scanners(self):
+        for profile in SecurityProfile.objects.all():
+            with self.subTest(profile=profile.slug):
+                self.assertIn(profile.scanner_name, list_scanners())
+                profile.full_clean()
+
+    def test_quick_scan_carries_nmap_flags(self):
+        profile = SecurityProfile.objects.get(slug="quick-scan")
+
+        self.assertEqual(profile.scanner_name, "nmap")
+        self.assertEqual(
+            NmapScanner().build_command("127.0.0.1", profile.options),
+            ["nmap", "-sV", "-oX", "-", "127.0.0.1"],
+        )
+
+    def test_slug_is_derived_from_name_when_blank(self):
+        profile = SecurityProfile.objects.create(name="My Scan", scanner_name="demo")
+
+        self.assertEqual(profile.slug, "my-scan")
+
+    def test_create_scan_copies_options_onto_the_scan(self):
+        target = Target.objects.create(value="127.0.0.1")
+        profile = SecurityProfile.objects.get(slug="quick-scan")
+
+        scan = profile.create_scan(target)
+
+        self.assertEqual(scan.scanner_name, "nmap")
+        self.assertEqual(scan.options, profile.options)
+        # A copy, so later edits to the profile don't rewrite scan history.
+        self.assertIsNot(scan.options, profile.options)
+
+    def test_unregistered_scanner_is_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(name="Bogus", scanner_name="not-a-scanner")
+
+        self.assertIn("scanner_name", ctx.exception.message_dict)
+
+    def test_option_key_the_scanner_did_not_opt_into_is_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(
+                name="Sneaky", scanner_name="nmap", options={"made_up": True}
+            )
+
+        self.assertIn("options", ctx.exception.message_dict)
+
+    def test_profile_cannot_point_gobuster_at_an_arbitrary_file(self):
+        # build_command() drops wordlist_path straight into argv, so a stored
+        # profile must not be able to set it — otherwise a profile could make
+        # gobuster read /etc/passwd and surface matching lines as findings.
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(
+                name="Exfil",
+                scanner_name="gobuster",
+                options={"wordlist_path": "/etc/passwd"},
+            )
+
+        self.assertIn("options", ctx.exception.message_dict)
+
+    def test_non_dict_options_are_rejected(self):
+        with self.assertRaises(ValidationError):
+            SecurityProfile.objects.create(
+                name="Listy", scanner_name="nmap", options=["-A"]
+            )
+
+    def test_is_available_follows_the_underlying_scanner(self):
+        profile = SecurityProfile.objects.create(name="Demo run", scanner_name="demo")
+
+        self.assertTrue(profile.is_available())
+
+
+class SeverityOrderingTests(SimpleTestCase):
+    def test_rank_orders_critical_before_info(self):
+        self.assertLess(Severity.CRITICAL.rank, Severity.INFO.rank)
+        ranks = [s.rank for s in Severity]
+        self.assertEqual(ranks, sorted(ranks))
+
+    def test_parse_is_total_for_unknown_values(self):
+        self.assertEqual(Severity.parse("HIGH"), Severity.HIGH)
+        self.assertIsNone(Severity.parse("bogus"))
+
+    def test_worst_picks_the_most_serious(self):
+        self.assertEqual(Severity.worst(["info", "high", "low"]), Severity.HIGH)
+
+    def test_worst_ignores_unknown_and_empty(self):
+        self.assertEqual(Severity.worst(["bogus", "low"]), Severity.LOW)
+        self.assertIsNone(Severity.worst([]))
+        self.assertIsNone(Severity.worst(["bogus"]))
+
+
+class TargetAggregationTests(TestCase):
+    def setUp(self):
+        self.target = Target.objects.create(value="10.0.0.5")
+
+    def _scan(self, scanner_name, severities, status=Scan.Status.DONE):
+        scan = Scan.objects.create(
+            target=self.target, scanner_name=scanner_name, status=status
+        )
+        for severity in severities:
+            Finding.objects.create(
+                scan=scan, rule_id="r", message="m", severity=severity
+            )
+        return scan
+
+    def test_no_scans_means_no_severity(self):
+        self.assertIsNone(self.target.current_severity())
+        self.assertEqual(self.target.latest_scans(), [])
+
+    def test_severity_is_the_worst_current_finding(self):
+        self._scan("nmap", ["info", "high", "low"])
+
+        self.assertEqual(self.target.current_severity(), "high")
+
+    def test_rescanning_clears_a_fixed_finding(self):
+        # The whole point of scoping to latest_scans(): fix telnet, rescan,
+        # and the target must stop reporting high.
+        self._scan("nmap", ["high"])
+        self._scan("nmap", ["info"])
+
+        self.assertEqual(self.target.current_severity(), "info")
+        self.assertEqual(len(self.target.latest_scans()), 1)
+
+    def test_keeps_newest_result_from_each_scanner(self):
+        # A later nmap run must not discard gobuster's separate findings.
+        self._scan("gobuster", ["medium"])
+        self._scan("nmap", ["info"])
+
+        scanners = {s.scanner_name for s in self.target.latest_scans()}
+        self.assertEqual(scanners, {"nmap", "gobuster"})
+        self.assertEqual(self.target.current_severity(), "medium")
+
+    def test_unfinished_scans_do_not_count(self):
+        self._scan("nmap", ["critical"], status=Scan.Status.FAILED)
+        self._scan("nmap", ["low"])
+
+        self.assertEqual(self.target.current_severity(), "low")
+
+
+class TargetDetailViewTests(TestCase):
+    def test_shows_current_severity_and_marks_superseded_scans(self):
+        target = Target.objects.create(value="10.0.0.9")
+        old = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(
+            scan=old, rule_id="old", message="telnet open", severity="high"
+        )
+        new = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(
+            scan=new, rule_id="new", message="ssh only", severity="info"
+        )
+
+        response = self.client.get(reverse("scanners:target_detail", args=[target.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["current_severity"], "info")
+        self.assertEqual(response.context["current_scan_ids"], {new.id})
+        self.assertContains(response, "superseded")
+        # The fixed finding stays visible as history, just not as current.
+        self.assertContains(response, "telnet open")
+
+    def test_unknown_target_is_404(self):
+        response = self.client.get(reverse("scanners:target_detail", args=[9999]))
+
+        self.assertEqual(response.status_code, 404)
+
+
+class DashboardTargetsTests(TestCase):
+    def test_targets_are_listed_worst_first(self):
+        for value, severity in [("a.test", "low"), ("b.test", "critical")]:
+            target = Target.objects.create(value=value)
+            scan = Scan.objects.create(
+                target=target, scanner_name="nmap", status=Scan.Status.DONE
+            )
+            Finding.objects.create(
+                scan=scan, rule_id="r", message="m", severity=severity
+            )
+        Target.objects.create(value="unscanned.test")
+
+        response = self.client.get(reverse("dashboard:index"))
+        rows = response.context["targets"]
+
+        self.assertEqual(
+            [r["target"].value for r in rows],
+            ["b.test", "a.test", "unscanned.test"],
+        )
+        self.assertIsNone(rows[-1]["severity"])
+
+    def test_severity_breakdown_excludes_superseded_findings(self):
+        # Dashboard must not report a High that no target actually has.
+        target = Target.objects.create(value="fixed.test")
+        old = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(scan=old, rule_id="r", message="m", severity="high")
+        new = Scan.objects.create(
+            target=target, scanner_name="nmap", status=Scan.Status.DONE
+        )
+        Finding.objects.create(scan=new, rule_id="r", message="m", severity="info")
+
+        response = self.client.get(reverse("dashboard:index"))
+        counts = dict(response.context["severity_counts"])
+
+        self.assertEqual(counts["high"], 0)
+        self.assertEqual(counts["info"], 1)
+        self.assertEqual(response.context["current_findings_count"], 1)

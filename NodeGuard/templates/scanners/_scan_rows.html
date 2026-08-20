@@ -13,7 +13,10 @@
         {% for scan in scans %}
         <tr class="border-t border-slate-800 align-top">
             <td class="px-4 py-3 text-slate-500">{{ scan.id }}</td>
-            <td class="px-4 py-3 font-mono">{{ scan.target }}</td>
+            <td class="px-4 py-3 font-mono">
+                <a href="{% url 'scanners:target_detail' scan.target.pk %}"
+                   class="text-brand hover:underline">{{ scan.target }}</a>
+            </td>
             <td class="px-4 py-3">{{ scan.scanner_name }}</td>
             <td class="px-4 py-3">
                 <span class="px-2 py-0.5 rounded text-xs {{ scan.status|status_classes }}">{{ scan.status }}</span>
