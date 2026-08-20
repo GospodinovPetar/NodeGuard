@@ -20,11 +20,27 @@ from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
 from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
-from .registry import available_scanners, get_scanner, list_scanners, tool_status
+from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
-from .views import MAX_WORDLIST_BYTES, _collect_scan_options
+from .views import MAX_WORDLIST_BYTES, ScanOptionError, _collect_scan_options
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _stub_gobuster(available=True):
+    scanner = mock.Mock(is_available=mock.Mock(return_value=available))
+    return mock.patch(
+        "scanners.views.list_scanners", return_value={"gobuster": scanner}
+    )
+
+
+def _done_scan(target, scanner_name, *severities, status=Scan.Status.DONE, message="m"):
+    scan = Scan.objects.create(target=target, scanner_name=scanner_name, status=status)
+    for severity in severities:
+        Finding.objects.create(
+            scan=scan, rule_id="r", message=message, severity=severity
+        )
+    return scan
 
 
 class RegistryTests(TestCase):
@@ -283,10 +299,7 @@ class TriggerScanViewTests(TestCase):
         # is_available() instead of relying on gobuster actually being
         # missing — that assumption broke the moment it got baked into the
         # image and made this test flaky by environment.
-        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=False))
-        with mock.patch(
-            "scanners.views.list_scanners", return_value={"gobuster": fake_scanner}
-        ):
+        with _stub_gobuster(available=False):
             response = self.client.post(
                 reverse("scanners:trigger"),
                 {"target": "example.com", "scanner": "gobuster"},
@@ -300,18 +313,11 @@ class TriggerScanViewTests(TestCase):
         # is_available() is stubbed and run_scan is a no-op: this test is
         # about the view saving the upload correctly, not about a real
         # gobuster binary being on PATH or hitting the network.
-        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=True))
         upload = SimpleUploadedFile(
             "custom.txt", b"admin\nlogin\n", content_type="text/plain"
         )
 
-        with (
-            mock.patch(
-                "scanners.views.list_scanners",
-                return_value={"gobuster": fake_scanner},
-            ),
-            mock.patch("scanners.views.run_scan"),
-        ):
+        with _stub_gobuster(), mock.patch("scanners.views.run_scan"):
             response = self.client.post(
                 reverse("scanners:trigger"),
                 {"target": "example.com", "scanner": "gobuster", "wordlist": upload},
@@ -323,12 +329,9 @@ class TriggerScanViewTests(TestCase):
         scan.wordlist.delete(save=False)
 
     def test_gobuster_rejected_wordlist_creates_no_scan(self):
-        fake_scanner = mock.Mock(is_available=mock.Mock(return_value=True))
         upload = SimpleUploadedFile("custom.csv", b"admin\n", content_type="text/csv")
 
-        with mock.patch(
-            "scanners.views.list_scanners", return_value={"gobuster": fake_scanner}
-        ):
+        with _stub_gobuster():
             response = self.client.post(
                 reverse("scanners:trigger"),
                 {"target": "example.com", "scanner": "gobuster", "wordlist": upload},
@@ -352,25 +355,22 @@ class CollectScanOptionsTests(SimpleTestCase):
     def test_nmap_reads_checkbox_flags(self):
         request = self.factory.post("/trigger/", {"nmap_a": "on"})
 
-        options, wordlist, error = _collect_scan_options(request, "nmap")
+        options, wordlist = _collect_scan_options(request, "nmap")
 
         self.assertEqual(options, {"service_detection": False, "aggressive": True})
         self.assertIsNone(wordlist)
-        self.assertIsNone(error)
 
     def test_nmap_defaults_to_false_when_no_checkboxes_submitted(self):
         request = self.factory.post("/trigger/", {})
 
-        options, _, _ = _collect_scan_options(request, "nmap")
+        options, _ = _collect_scan_options(request, "nmap")
 
         self.assertEqual(options, {"service_detection": False, "aggressive": False})
 
     def test_gobuster_without_upload_uses_bundled_wordlist(self):
         request = self.factory.post("/trigger/", {})
 
-        options, wordlist, error = _collect_scan_options(request, "gobuster")
-
-        self.assertEqual((options, wordlist, error), ({}, None, None))
+        self.assertEqual(_collect_scan_options(request, "gobuster"), ({}, None))
 
     def test_gobuster_accepts_txt_upload_under_size_limit(self):
         upload = SimpleUploadedFile(
@@ -378,21 +378,17 @@ class CollectScanOptionsTests(SimpleTestCase):
         )
         request = self.factory.post("/trigger/", {"wordlist": upload})
 
-        options, wordlist, error = _collect_scan_options(request, "gobuster")
+        options, wordlist = _collect_scan_options(request, "gobuster")
 
         self.assertEqual(options, {})
         self.assertEqual(wordlist.name, "custom.txt")
-        self.assertIsNone(error)
 
     def test_gobuster_rejects_non_txt_extension(self):
         upload = SimpleUploadedFile("custom.csv", b"admin\n", content_type="text/csv")
         request = self.factory.post("/trigger/", {"wordlist": upload})
 
-        options, wordlist, error = _collect_scan_options(request, "gobuster")
-
-        self.assertIsNone(options)
-        self.assertIsNone(wordlist)
-        self.assertIn(".txt", error)
+        with self.assertRaisesMessage(ScanOptionError, ".txt"):
+            _collect_scan_options(request, "gobuster")
 
     def test_gobuster_rejects_oversized_upload(self):
         upload = SimpleUploadedFile(
@@ -400,18 +396,13 @@ class CollectScanOptionsTests(SimpleTestCase):
         )
         request = self.factory.post("/trigger/", {"wordlist": upload})
 
-        options, wordlist, error = _collect_scan_options(request, "gobuster")
-
-        self.assertIsNone(options)
-        self.assertIsNone(wordlist)
-        self.assertIn("голям", error)
+        with self.assertRaisesMessage(ScanOptionError, "голям"):
+            _collect_scan_options(request, "gobuster")
 
     def test_unknown_scanner_gets_empty_options(self):
         request = self.factory.post("/trigger/", {})
 
-        result = _collect_scan_options(request, "demo")
-
-        self.assertEqual(result, ({}, None, None))
+        self.assertEqual(_collect_scan_options(request, "demo"), ({}, None))
 
 
 class CatalogIndexViewTests(TestCase):
@@ -530,23 +521,16 @@ class TargetAggregationTests(TestCase):
         self.target = Target.objects.create(value="10.0.0.5")
 
     def _scan(self, scanner_name, severities, status=Scan.Status.DONE):
-        scan = Scan.objects.create(
-            target=self.target, scanner_name=scanner_name, status=status
-        )
-        for severity in severities:
-            Finding.objects.create(
-                scan=scan, rule_id="r", message="m", severity=severity
-            )
-        return scan
+        return _done_scan(self.target, scanner_name, *severities, status=status)
 
     def test_no_scans_means_no_severity(self):
-        self.assertIsNone(self.target.current_severity())
-        self.assertEqual(self.target.latest_scans(), [])
+        self.assertIsNone(self.target.current_severity)
+        self.assertEqual(self.target.latest_scans, [])
 
     def test_severity_is_the_worst_current_finding(self):
         self._scan("nmap", ["info", "high", "low"])
 
-        self.assertEqual(self.target.current_severity(), "high")
+        self.assertEqual(self.target.current_severity, "high")
 
     def test_rescanning_clears_a_fixed_finding(self):
         # The whole point of scoping to latest_scans(): fix telnet, rescan,
@@ -554,40 +538,30 @@ class TargetAggregationTests(TestCase):
         self._scan("nmap", ["high"])
         self._scan("nmap", ["info"])
 
-        self.assertEqual(self.target.current_severity(), "info")
-        self.assertEqual(len(self.target.latest_scans()), 1)
+        self.assertEqual(self.target.current_severity, "info")
+        self.assertEqual(len(self.target.latest_scans), 1)
 
     def test_keeps_newest_result_from_each_scanner(self):
         # A later nmap run must not discard gobuster's separate findings.
         self._scan("gobuster", ["medium"])
         self._scan("nmap", ["info"])
 
-        scanners = {s.scanner_name for s in self.target.latest_scans()}
+        scanners = {s.scanner_name for s in self.target.latest_scans}
         self.assertEqual(scanners, {"nmap", "gobuster"})
-        self.assertEqual(self.target.current_severity(), "medium")
+        self.assertEqual(self.target.current_severity, "medium")
 
     def test_unfinished_scans_do_not_count(self):
         self._scan("nmap", ["critical"], status=Scan.Status.FAILED)
         self._scan("nmap", ["low"])
 
-        self.assertEqual(self.target.current_severity(), "low")
+        self.assertEqual(self.target.current_severity, "low")
 
 
 class TargetDetailViewTests(TestCase):
     def test_shows_current_severity_and_marks_superseded_scans(self):
         target = Target.objects.create(value="10.0.0.9")
-        old = Scan.objects.create(
-            target=target, scanner_name="nmap", status=Scan.Status.DONE
-        )
-        Finding.objects.create(
-            scan=old, rule_id="old", message="telnet open", severity="high"
-        )
-        new = Scan.objects.create(
-            target=target, scanner_name="nmap", status=Scan.Status.DONE
-        )
-        Finding.objects.create(
-            scan=new, rule_id="new", message="ssh only", severity="info"
-        )
+        _done_scan(target, "nmap", "high", message="telnet open")
+        new = _done_scan(target, "nmap", "info", message="ssh only")
 
         response = self.client.get(reverse("scanners:target_detail", args=[target.pk]))
 
@@ -607,13 +581,7 @@ class TargetDetailViewTests(TestCase):
 class DashboardTargetsTests(TestCase):
     def test_targets_are_listed_worst_first(self):
         for value, severity in [("a.test", "low"), ("b.test", "critical")]:
-            target = Target.objects.create(value=value)
-            scan = Scan.objects.create(
-                target=target, scanner_name="nmap", status=Scan.Status.DONE
-            )
-            Finding.objects.create(
-                scan=scan, rule_id="r", message="m", severity=severity
-            )
+            _done_scan(Target.objects.create(value=value), "nmap", severity)
         Target.objects.create(value="unscanned.test")
 
         response = self.client.get(reverse("dashboard:index"))
@@ -628,14 +596,8 @@ class DashboardTargetsTests(TestCase):
     def test_severity_breakdown_excludes_superseded_findings(self):
         # Dashboard must not report a High that no target actually has.
         target = Target.objects.create(value="fixed.test")
-        old = Scan.objects.create(
-            target=target, scanner_name="nmap", status=Scan.Status.DONE
-        )
-        Finding.objects.create(scan=old, rule_id="r", message="m", severity="high")
-        new = Scan.objects.create(
-            target=target, scanner_name="nmap", status=Scan.Status.DONE
-        )
-        Finding.objects.create(scan=new, rule_id="r", message="m", severity="info")
+        _done_scan(target, "nmap", "high")
+        _done_scan(target, "nmap", "info")
 
         response = self.client.get(reverse("dashboard:index"))
         counts = dict(response.context["severity_counts"])
@@ -741,17 +703,6 @@ class ModelStringRepresentationTests(TestCase):
         )
 
         self.assertEqual(str(profile), "Smoke Test Preset")
-
-
-class AvailableScannersTests(SimpleTestCase):
-    def test_lists_only_installed_tools(self):
-        available = available_scanners()
-
-        self.assertIn("demo", available)
-        self.assertEqual(
-            set(available),
-            {status.name for status in tool_status() if status.available},
-        )
 
 
 class NmapAddressFallbackTests(SimpleTestCase):

@@ -1,3 +1,5 @@
+from functools import cached_property
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
@@ -13,32 +15,27 @@ class Target(models.Model):
     def __str__(self) -> str:
         return self.value
 
+    @cached_property
+    def scans_newest_first(self) -> list["Scan"]:
+        return sorted(
+            self.scans.all(), key=lambda s: (s.created_at, s.id), reverse=True
+        )
+
+    @cached_property
     def latest_scans(self) -> list["Scan"]:
-        """The newest completed scan for each scanner that has run here.
-
-        Not simply "the newest scan": nmap and gobuster answer different
-        questions, so taking only the single most recent run would silently
-        drop the other tool's results. One row per scanner, newest wins.
-
-        Done in Python because DISTINCT ON is Postgres-only and this is a
-        local SQLite tool — a target has a handful of scans, not thousands.
-        """
         newest: dict[str, Scan] = {}
-        for scan in self.scans.filter(status=Scan.Status.DONE).order_by("-created_at"):
-            newest.setdefault(scan.scanner_name, scan)
+        for scan in self.scans_newest_first:
+            if scan.status == Scan.Status.DONE:
+                newest.setdefault(scan.scanner_name, scan)
         return list(newest.values())
 
+    @cached_property
     def current_findings(self) -> list["Finding"]:
-        """Findings that still reflect reality, i.e. from latest_scans().
+        return [f for scan in self.latest_scans for f in scan.findings.all()]
 
-        Deliberately not every finding ever recorded: fixing a service and
-        rescanning would otherwise leave the old finding counted forever.
-        """
-        return [f for scan in self.latest_scans() for f in scan.findings.all()]
-
+    @cached_property
     def current_severity(self) -> str | None:
-        """Worst severity across current_findings(), or None if clean."""
-        worst = Severity.worst(f.severity for f in self.current_findings())
+        worst = Severity.worst(f.severity for f in self.current_findings)
         return worst.value if worst else None
 
 

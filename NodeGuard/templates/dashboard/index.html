@@ -29,14 +29,10 @@
         <div class="text-3xl font-bold">{{ current_findings_count }}</div>
         <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">Open findings</div>
     </div>
-    {% for status, count in status_counts %}
-    {% if status == 'running' %}
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-        <div class="text-3xl font-bold">{{ count }}</div>
-        <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">{{ status }}</div>
+        <div class="text-3xl font-bold">{{ running_count }}</div>
+        <div class="text-xs text-slate-400 mt-1 uppercase tracking-wide">running</div>
     </div>
-    {% endif %}
-    {% endfor %}
 </div>
 
 <div class="grid lg:grid-cols-3 gap-6">
@@ -77,15 +73,7 @@
             {% for tool in tools %}
             <li class="flex items-center justify-between">
                 <span class="font-mono text-sm">{{ tool.name }}</span>
-                {% if tool.available %}
-                <span class="flex items-center gap-1.5 text-xs text-emerald-400">
-                    <span class="h-2 w-2 rounded-full bg-emerald-400"></span> installed
-                </span>
-                {% else %}
-                <span class="flex items-center gap-1.5 text-xs text-slate-500">
-                    <span class="h-2 w-2 rounded-full bg-slate-600"></span> missing
-                </span>
-                {% endif %}
+                {% include "scanners/_tool_status_pill.html" with tool=tool %}
             </li>
             {% endfor %}
         </ul>

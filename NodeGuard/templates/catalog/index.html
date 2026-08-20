@@ -26,15 +26,7 @@
                 <h2 class="font-semibold text-lg capitalize">{{ tool.name }}</h2>
                 <p class="font-mono text-xs text-slate-500 mt-0.5">{{ tool.binary_name }}</p>
             </div>
-            {% if tool.available %}
-            <span class="flex items-center gap-1.5 text-xs text-emerald-400 shrink-0">
-                <span class="h-2 w-2 rounded-full bg-emerald-400"></span> installed
-            </span>
-            {% else %}
-            <span class="flex items-center gap-1.5 text-xs text-slate-500 shrink-0">
-                <span class="h-2 w-2 rounded-full bg-slate-600"></span> not installed
-            </span>
-            {% endif %}
+            {% include "scanners/_tool_status_pill.html" with tool=tool %}
         </div>
 
         <p class="text-xs text-slate-400 mt-3 flex-1">

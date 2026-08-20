@@ -25,7 +25,7 @@
     <h2 class="font-semibold mb-4">Current findings</h2>
     {% for finding in current_findings %}
     <div class="flex items-start gap-2 mb-2">
-        <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
+        {% include "scanners/_severity_badge.html" with severity=finding.severity %}
         <div>
             <div class="text-slate-200">{{ finding.message }}</div>
             <div class="text-slate-500 text-xs font-mono">{{ finding.rule_id }} · {{ finding.scan.scanner_name }}</div>
@@ -63,17 +63,7 @@
             {% endif %}
 
             <div class="mt-3">
-                {% for finding in scan.findings.all %}
-                <div class="flex items-start gap-2 mb-1">
-                    <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-medium shrink-0 {{ finding.severity|severity_classes }}">{{ finding.severity }}</span>
-                    <span class="text-slate-300 text-sm">{{ finding.message }}</span>
-                </div>
-                {% empty %}
-                {% if scan.status == 'done' %}
-                <span class="text-slate-500 text-sm">No findings.</span>
-                {% endif %}
-                {% endfor %}
-                {% if scan.error %}<div class="text-red-400 text-xs mt-1">{{ scan.error }}</div>{% endif %}
+                {% include "scanners/_scan_findings.html" with scan=scan %}
             </div>
         </div>
         {% empty %}

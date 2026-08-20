@@ -27,10 +27,10 @@
                     @change="available = $event.target.selectedOptions[0].dataset.available === 'true'; scanner = $event.target.value"
                     class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm
                            focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand">
-                {% for name, scanner in scanners.items %}
-                <option value="{{ name }}" data-available="{{ scanner.is_available|yesno:'true,false' }}"
-                        {% if not scanner.is_available %}disabled{% endif %}>
-                    {{ name }}{% if not scanner.is_available %} — not installed{% endif %}
+                {% for tool in tools %}
+                <option value="{{ tool.name }}" data-available="{{ tool.available|yesno:'true,false' }}"
+                        {% if not tool.available %}disabled{% endif %}>
+                    {{ tool.name }}{% if not tool.available %} — not installed{% endif %}
                 </option>
                 {% endfor %}
             </select>
