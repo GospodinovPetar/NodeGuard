@@ -1,4 +1,8 @@
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils.text import slugify
+
+from .registry import list_scanners
 
 
 class Target(models.Model):
@@ -33,6 +37,73 @@ class Scan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.scanner_name} -> {self.target} ({self.status})"
+
+
+class SecurityProfile(models.Model):
+    """A named scanner + options bundle, so the user picks "Quick Scan"
+    instead of remembering which flags that means.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=100, unique=True, blank=True)
+    description = models.TextField(blank=True)
+    scanner_name = models.CharField(max_length=100)
+    options = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self) -> None:
+        scanners = list_scanners()
+        scanner = scanners.get(self.scanner_name)
+        if scanner is None:
+            raise ValidationError(
+                {"scanner_name": f"'{self.scanner_name}' не е регистриран scanner."}
+            )
+
+        if not isinstance(self.options, dict):
+            raise ValidationError({"options": "options трябва да е JSON обект."})
+
+        # build_command() puts option values into argv, so a profile may only
+        # carry keys the scanner has explicitly opted in to. Without this, a
+        # profile could set gobuster's wordlist_path to any file on disk and
+        # have its contents brute-forced back out as findings.
+        unknown = set(self.options) - set(scanner.profile_options)
+        if unknown:
+            allowed = ", ".join(sorted(scanner.profile_options)) or "(няма)"
+            raise ValidationError(
+                {
+                    "options": (
+                        f"'{self.scanner_name}' не приема {sorted(unknown)} "
+                        f"като profile options. Позволени: {allowed}."
+                    )
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        # Profiles are configuration that later becomes a subprocess argv, so
+        # an invalid one must never reach the DB — including when created
+        # programmatically, where Django would otherwise skip clean().
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def is_available(self) -> bool:
+        scanner = list_scanners().get(self.scanner_name)
+        return scanner is not None and scanner.is_available()
+
+    def create_scan(self, target: "Target") -> "Scan":
+        """Materialize this preset into a runnable Scan row."""
+        return Scan.objects.create(
+            target=target,
+            scanner_name=self.scanner_name,
+            options=dict(self.options),
+        )
 
 
 class Finding(models.Model):

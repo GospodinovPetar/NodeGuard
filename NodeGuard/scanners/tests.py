@@ -4,13 +4,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
-from .models import Scan, Target
+from .models import Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
@@ -406,3 +407,80 @@ class CatalogIndexViewTests(TestCase):
         available = sum(1 for s in statuses if s.available)
         self.assertContains(response, f"{available}/{len(statuses)} available")
         self.assertContains(response, "installed")
+
+
+class SecurityProfileTests(TestCase):
+    def test_builtin_profiles_are_seeded_by_migration(self):
+        slugs = set(SecurityProfile.objects.values_list("slug", flat=True))
+
+        self.assertIn("quick-scan", slugs)
+        self.assertIn("deep-web-scan", slugs)
+
+    def test_builtin_profiles_reference_registered_scanners(self):
+        for profile in SecurityProfile.objects.all():
+            with self.subTest(profile=profile.slug):
+                self.assertIn(profile.scanner_name, list_scanners())
+                profile.full_clean()
+
+    def test_quick_scan_carries_nmap_flags(self):
+        profile = SecurityProfile.objects.get(slug="quick-scan")
+
+        self.assertEqual(profile.scanner_name, "nmap")
+        self.assertEqual(
+            NmapScanner().build_command("127.0.0.1", profile.options),
+            ["nmap", "-sV", "-oX", "-", "127.0.0.1"],
+        )
+
+    def test_slug_is_derived_from_name_when_blank(self):
+        profile = SecurityProfile.objects.create(name="My Scan", scanner_name="demo")
+
+        self.assertEqual(profile.slug, "my-scan")
+
+    def test_create_scan_copies_options_onto_the_scan(self):
+        target = Target.objects.create(value="127.0.0.1")
+        profile = SecurityProfile.objects.get(slug="quick-scan")
+
+        scan = profile.create_scan(target)
+
+        self.assertEqual(scan.scanner_name, "nmap")
+        self.assertEqual(scan.options, profile.options)
+        # A copy, so later edits to the profile don't rewrite scan history.
+        self.assertIsNot(scan.options, profile.options)
+
+    def test_unregistered_scanner_is_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(name="Bogus", scanner_name="not-a-scanner")
+
+        self.assertIn("scanner_name", ctx.exception.message_dict)
+
+    def test_option_key_the_scanner_did_not_opt_into_is_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(
+                name="Sneaky", scanner_name="nmap", options={"made_up": True}
+            )
+
+        self.assertIn("options", ctx.exception.message_dict)
+
+    def test_profile_cannot_point_gobuster_at_an_arbitrary_file(self):
+        # build_command() drops wordlist_path straight into argv, so a stored
+        # profile must not be able to set it — otherwise a profile could make
+        # gobuster read /etc/passwd and surface matching lines as findings.
+        with self.assertRaises(ValidationError) as ctx:
+            SecurityProfile.objects.create(
+                name="Exfil",
+                scanner_name="gobuster",
+                options={"wordlist_path": "/etc/passwd"},
+            )
+
+        self.assertIn("options", ctx.exception.message_dict)
+
+    def test_non_dict_options_are_rejected(self):
+        with self.assertRaises(ValidationError):
+            SecurityProfile.objects.create(
+                name="Listy", scanner_name="nmap", options=["-A"]
+            )
+
+    def test_is_available_follows_the_underlying_scanner(self):
+        profile = SecurityProfile.objects.create(name="Demo run", scanner_name="demo")
+
+        self.assertTrue(profile.is_available())

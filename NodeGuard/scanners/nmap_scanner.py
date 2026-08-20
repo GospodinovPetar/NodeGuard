@@ -35,6 +35,7 @@ class NmapScanner(BaseScanner):
     """
 
     binary_name = "nmap"
+    profile_options = frozenset({"service_detection", "aggressive"})
 
     def build_command(self, target: str, options: dict | None = None) -> list[str]:
         options = options or {}

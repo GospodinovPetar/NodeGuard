@@ -42,6 +42,13 @@ class BaseScanner(abc.ABC):
     name: str
     binary_name: str
 
+    # Option keys a SecurityProfile is allowed to set. Empty by default so a
+    # scanner has to opt in explicitly: build_command() reads options into
+    # argv, and some keys are meant to be filled at runtime from validated
+    # input (gobuster's wordlist_path comes from an uploaded file), never
+    # from stored profile config.
+    profile_options: frozenset[str] = frozenset()
+
     @abc.abstractmethod
     def build_command(self, target: str, options: dict | None = None) -> list[str]:
         """Return the argv list to pass to subprocess.run for this target.
