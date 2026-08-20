@@ -13,3 +13,4 @@
 - **Compiled Tailwind** (standalone CLI) вместо Play CDN — CDN версията е добра за local dev/MVP (виж baseline doc), но не е production-ready (runtime JIT compile, no purge)
 - **Dark/light theme toggle** — в момента dark-only
 - **Rate limiting / concurrency cap** на едновременни scans — в момента нищо не пречи на потребител да опашка 50 scan-а наведнъж
+- **Преводи (i18n)** — Django `.po`/`.mo` файлове през стандартния `makemessages`/`compilemessages` flow, template strings обвити в `{% trans %}`/`{% blocktrans %}`. В момента UI-ът е hardcoded смес от български/английски текст без `{% load i18n %}`

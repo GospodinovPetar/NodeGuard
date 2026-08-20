@@ -2,27 +2,9 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from .base import BaseScanner, Finding, Severity
+from . import severity_rules
+from .base import BaseScanner, Finding
 from .registry import register_scanner
-
-# An open port is not a vulnerability by itself, so the baseline is INFO.
-# These services are called out because they carry credentials in cleartext
-# or are routinely exposed by accident.
-_RISKY_SERVICES = {
-    "telnet": Severity.HIGH,
-    "rlogin": Severity.HIGH,
-    "rsh": Severity.HIGH,
-    "rexec": Severity.HIGH,
-    "vnc": Severity.HIGH,
-    "ftp": Severity.MEDIUM,
-    "microsoft-ds": Severity.MEDIUM,
-    "netbios-ssn": Severity.MEDIUM,
-    "ms-wbt-server": Severity.MEDIUM,
-    "mysql": Severity.MEDIUM,
-    "postgresql": Severity.MEDIUM,
-    "mongodb": Severity.MEDIUM,
-    "redis": Severity.MEDIUM,
-}
 
 
 @register_scanner("nmap")
@@ -86,19 +68,14 @@ class NmapScanner(BaseScanner):
             )
         )
 
-        severity = _RISKY_SERVICES.get(service, Severity.INFO)
-        rule_id = (
-            "nmap/insecure-service"
-            if severity is not Severity.INFO
-            else "nmap/open-port"
-        )
+        rule = severity_rules.open_port(service)
         message = f"{address}:{portid}/{protocol} open — {service}"
         if product:
             message = f"{message} ({product})"
 
         return Finding(
-            rule_id=rule_id,
+            rule_id=rule.rule_id,
             message=message,
-            severity=severity,
+            severity=rule.severity,
             raw=ET.tostring(port, encoding="unicode").strip(),
         )

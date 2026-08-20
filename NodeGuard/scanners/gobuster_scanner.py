@@ -3,7 +3,8 @@ from __future__ import annotations
 import pathlib
 import re
 
-from .base import BaseScanner, Finding, Severity
+from . import severity_rules
+from .base import BaseScanner, Finding
 from .registry import register_scanner
 
 WORDLIST_PATH = pathlib.Path(__file__).parent / "wordlists" / "common.txt"
@@ -45,14 +46,12 @@ class GobusterScanner(BaseScanner):
             if not match:
                 continue
             path, status = match.group(1), int(match.group(2))
-            # Sprint 2 refines this into a proper severity ruleset; for now
-            # a reachable (200) path is more notable than a redirect/denial.
-            severity = Severity.LOW if status == 200 else Severity.INFO
+            rule = severity_rules.discovered_path(path, status)
             findings.append(
                 Finding(
-                    rule_id=f"gobuster-{status}",
+                    rule_id=rule.rule_id,
                     message=f"{path} (Status: {status})",
-                    severity=severity,
+                    severity=rule.severity,
                     raw=line,
                 )
             )

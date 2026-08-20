@@ -1,19 +1,26 @@
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import RequestFactory, SimpleTestCase, TestCase
+from django.test import (
+    RequestFactory,
+    SimpleTestCase,
+    TestCase,
+    override_settings,
+)
 from django.urls import reverse
 
+from . import severity_rules
 from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
 from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
-from .registry import get_scanner, list_scanners, tool_status
+from .registry import available_scanners, get_scanner, list_scanners, tool_status
 from .tasks import run_scan
 from .views import MAX_WORDLIST_BYTES, _collect_scan_options
 
@@ -197,15 +204,28 @@ class GobusterScannerTests(TestCase):
 
     def test_parse_output_extracts_findings(self):
         raw = (
-            "/admin                (Status: 200) [Size: 1234]\n"
+            "/images               (Status: 200) [Size: 1234]\n"
             "/login                (Status: 301) [Size: 0]\n"
             "not a result line\n"
         )
         findings = self.scanner.parse_output(raw)
 
         self.assertEqual(len(findings), 2)
-        self.assertEqual(findings[0].severity.value, "low")
-        self.assertEqual(findings[1].severity.value, "info")
+        self.assertEqual(findings[0].message, "/images (Status: 200)")
+        self.assertEqual(
+            findings[0].raw, "/images               (Status: 200) [Size: 1234]"
+        )
+        self.assertEqual(findings[1].message, "/login (Status: 301)")
+
+    def test_parse_output_classifies_through_the_shared_ruleset(self):
+        raw = "/.env (Status: 200)\n/images (Status: 200)\n"
+
+        findings = self.scanner.parse_output(raw)
+
+        self.assertEqual(findings[0].severity, Severity.CRITICAL)
+        self.assertEqual(findings[0].rule_id, "gobuster/exposed-secret")
+        self.assertEqual(findings[1].severity, Severity.LOW)
+        self.assertEqual(findings[1].rule_id, "gobuster/discovered-path")
 
 
 class RunScanTests(TestCase):
@@ -623,3 +643,177 @@ class DashboardTargetsTests(TestCase):
         self.assertEqual(counts["high"], 0)
         self.assertEqual(counts["info"], 1)
         self.assertEqual(response.context["current_findings_count"], 1)
+
+
+class SeverityRulesOpenPortTests(SimpleTestCase):
+    def test_plain_service_is_informational(self):
+        rule = severity_rules.open_port("ssh")
+
+        self.assertEqual(rule.severity, Severity.INFO)
+        self.assertEqual(rule.rule_id, "nmap/open-port")
+
+    def test_cleartext_credential_services_are_high(self):
+        for service in ["telnet", "rlogin", "rsh", "rexec", "vnc"]:
+            with self.subTest(service=service):
+                rule = severity_rules.open_port(service)
+
+                self.assertEqual(rule.severity, Severity.HIGH)
+                self.assertEqual(rule.rule_id, "nmap/insecure-service")
+
+    def test_exposed_datastores_are_medium(self):
+        for service in ["mysql", "postgresql", "mongodb", "redis", "microsoft-ds"]:
+            with self.subTest(service=service):
+                self.assertEqual(
+                    severity_rules.open_port(service).severity, Severity.MEDIUM
+                )
+
+    def test_service_matching_ignores_case(self):
+        self.assertEqual(severity_rules.open_port("TELNET").severity, Severity.HIGH)
+
+
+class SeverityRulesDiscoveredPathTests(SimpleTestCase):
+    def test_readable_secret_material_is_critical(self):
+        for path in ["/.env", "/id_rsa", "/.htpasswd", "/credentials"]:
+            with self.subTest(path=path):
+                rule = severity_rules.discovered_path(path, 200)
+
+                self.assertEqual(rule.severity, Severity.CRITICAL)
+                self.assertEqual(rule.rule_id, "gobuster/exposed-secret")
+
+    def test_source_and_diagnostics_exposure_is_high(self):
+        for path in ["/.git", "/backup", "/phpinfo.php", "/server-status"]:
+            with self.subTest(path=path):
+                rule = severity_rules.discovered_path(path, 200)
+
+                self.assertEqual(rule.severity, Severity.HIGH)
+                self.assertEqual(rule.rule_id, "gobuster/information-disclosure")
+
+    def test_admin_interfaces_are_medium(self):
+        for path in ["/admin", "/wp-admin", "/phpmyadmin", "/console"]:
+            with self.subTest(path=path):
+                rule = severity_rules.discovered_path(path, 200)
+
+                self.assertEqual(rule.severity, Severity.MEDIUM)
+                self.assertEqual(rule.rule_id, "gobuster/exposed-admin-interface")
+
+    def test_any_other_served_path_is_low(self):
+        rule = severity_rules.discovered_path("/images", 200)
+
+        self.assertEqual(rule.severity, Severity.LOW)
+        self.assertEqual(rule.rule_id, "gobuster/discovered-path")
+
+    def test_protected_secret_is_not_escalated(self):
+        for status in [301, 302, 401, 403]:
+            with self.subTest(status=status):
+                rule = severity_rules.discovered_path("/.env", status)
+
+                self.assertEqual(rule.severity, Severity.INFO)
+                self.assertEqual(rule.rule_id, f"gobuster/path-{status}")
+
+    def test_path_matching_survives_gobuster_output_shapes(self):
+        for path in ["admin", "/admin", "/ADMIN", "/admin/", "  /admin  "]:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    severity_rules.discovered_path(path, 200).severity,
+                    Severity.MEDIUM,
+                )
+
+
+class ModelStringRepresentationTests(TestCase):
+    def test_scan_names_scanner_target_and_status(self):
+        target = Target.objects.create(value="example.test")
+        scan = Scan.objects.create(target=target, scanner_name="nmap")
+
+        self.assertEqual(str(scan), "nmap -> example.test (pending)")
+
+    def test_finding_leads_with_its_severity(self):
+        target = Target.objects.create(value="example.test")
+        scan = Scan.objects.create(target=target, scanner_name="nmap")
+        finding = Finding.objects.create(
+            scan=scan, rule_id="nmap/open-port", message="m", severity="info"
+        )
+
+        self.assertEqual(str(finding), "[info] nmap/open-port")
+
+    def test_security_profile_is_its_name(self):
+        profile = SecurityProfile.objects.create(
+            name="Smoke Test Preset", scanner_name="demo"
+        )
+
+        self.assertEqual(str(profile), "Smoke Test Preset")
+
+
+class AvailableScannersTests(SimpleTestCase):
+    def test_lists_only_installed_tools(self):
+        available = available_scanners()
+
+        self.assertIn("demo", available)
+        self.assertEqual(
+            set(available),
+            {status.name for status in tool_status() if status.available},
+        )
+
+
+class NmapAddressFallbackTests(SimpleTestCase):
+    def test_falls_back_to_the_ip_when_there_is_no_hostname(self):
+        raw = """<?xml version="1.0"?><nmaprun>
+          <host><address addr="203.0.113.5" addrtype="ipv4"/>
+            <ports><port protocol="tcp" portid="22">
+              <state state="open"/><service name="ssh"/>
+            </port></ports>
+          </host></nmaprun>"""
+
+        findings = NmapScanner().parse_output(raw)
+
+        self.assertIn("203.0.113.5:22/tcp", findings[0].message)
+
+    def test_falls_back_to_unknown_when_there_is_no_address_either(self):
+        raw = """<?xml version="1.0"?><nmaprun>
+          <host><ports><port protocol="tcp" portid="22">
+              <state state="open"/><service name="ssh"/>
+          </port></ports></host></nmaprun>"""
+
+        findings = NmapScanner().parse_output(raw)
+
+        self.assertIn("unknown:22/tcp", findings[0].message)
+
+
+class ScanRowsPartialTests(TestCase):
+    def test_renders_the_rows_partial_without_the_page_chrome(self):
+        target = Target.objects.create(value="example.test")
+        Scan.objects.create(target=target, scanner_name="nmap")
+
+        response = self.client.get(reverse("scanners:rows"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "example.test")
+        self.assertNotContains(response, "<nav")
+
+
+class RunScanWordlistTests(TestCase):
+    def setUp(self):
+        media_root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, media_root, ignore_errors=True)
+        override = override_settings(MEDIA_ROOT=media_root)
+        override.enable()
+        self.addCleanup(override.disable)
+
+    def test_uploaded_wordlist_is_passed_to_the_scanner_as_an_option(self):
+        target = Target.objects.create(value="127.0.0.1")
+        scan = Scan.objects.create(
+            target=target,
+            scanner_name="demo",
+            wordlist=SimpleUploadedFile("custom.txt", b"admin\nlogin\n"),
+        )
+
+        scanner = get_scanner("demo")
+        with mock.patch("scanners.tasks.get_scanner", return_value=scanner):
+            with mock.patch.object(
+                scanner, "build_command", wraps=scanner.build_command
+            ) as spy:
+                run_scan(scan.id)
+
+        scan.refresh_from_db()
+        self.assertEqual(scan.status, Scan.Status.DONE)
+        _, options = spy.call_args.args
+        self.assertEqual(options["wordlist_path"], scan.wordlist.path)
