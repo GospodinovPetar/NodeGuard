@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NodeGuard report — {{ target.value }}</title>
+<style>
+    @page {
+        size: A4;
+        margin: 2cm 1.8cm;
+        @bottom-center {
+            content: "NodeGuard security report · page " counter(page) " of " counter(pages);
+            font-size: 8pt;
+            color: #94a3b8;
+        }
+    }
+    * { box-sizing: border-box; }
+    body {
+        font-family: "DejaVu Sans", "Helvetica Neue", Arial, sans-serif;
+        color: #1e293b;
+        font-size: 10pt;
+        line-height: 1.45;
+        margin: 0;
+    }
+    h1 { font-size: 20pt; margin: 0; color: #0f172a; }
+    h2 {
+        font-size: 12pt;
+        margin: 22px 0 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid #e2e8f0;
+        color: #0f172a;
+    }
+    .brand { color: #047857; }
+    .muted { color: #64748b; }
+    .header { border-bottom: 3px solid #047857; padding-bottom: 12px; margin-bottom: 4px; }
+    .target { font-family: "DejaVu Sans Mono", monospace; font-size: 13pt; margin-top: 6px; }
+
+    .chip {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 8.5pt;
+        font-weight: bold;
+        text-transform: uppercase;
+        color: #fff;
+    }
+    .sev-critical { background: #b91c1c; }
+    .sev-high     { background: #dc2626; }
+    .sev-medium   { background: #d97706; }
+    .sev-low      { background: #0284c7; }
+    .sev-info     { background: #475569; }
+    .sev-none     { background: #16a34a; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    th { background: #f1f5f9; font-size: 8.5pt; text-transform: uppercase; letter-spacing: .03em; color: #475569; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 8.5pt; color: #64748b; }
+
+    .summary-grid { display: flex; gap: 14px; margin: 10px 0 4px; }
+    .card { flex: 1; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; }
+    .card .big { font-size: 18pt; font-weight: bold; color: #0f172a; }
+    .card .lbl { font-size: 8pt; text-transform: uppercase; letter-spacing: .04em; color: #64748b; }
+
+    .finding { padding: 7px 0; border-bottom: 1px solid #f1f5f9; }
+    .finding .msg { margin: 2px 0 0; }
+    .empty { color: #64748b; font-style: italic; }
+    .footer-note { margin-top: 26px; font-size: 8pt; color: #94a3b8; }
+</style>
+</head>
+<body>
+    <div class="header">
+        <div class="muted" style="font-size:9pt; letter-spacing:.08em; text-transform:uppercase;">
+            Node<span class="brand">Guard</span> · Security Assessment Report
+        </div>
+        <h1>Target report</h1>
+        <div class="target">{{ target.value }}</div>
+        <div class="muted" style="margin-top:6px;">Generated {{ generated_at|date:"d M Y, H:i" }} UTC</div>
+    </div>
+
+    <h2>Executive summary</h2>
+    <p>
+        This report summarizes the current security posture of
+        <strong>{{ target.value }}</strong>, based on the most recent completed
+        scan from each configured scanner. Superseded scans are retained below as
+        history. Overall risk is the most severe outstanding finding.
+    </p>
+
+    <div class="summary-grid">
+        <div class="card">
+            <div class="lbl">Overall risk</div>
+            <div style="margin-top:6px;">
+                {% if current_severity %}
+                <span class="chip sev-{{ current_severity }}">{{ current_severity }}</span>
+                {% else %}
+                <span class="chip sev-none">No findings</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="card">
+            <div class="big">{{ finding_count }}</div>
+            <div class="lbl">Open findings</div>
+        </div>
+        <div class="card">
+            <div class="big">{{ scans|length }}</div>
+            <div class="lbl">Scans on record</div>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr><th>Severity</th><th class="num">Open findings</th></tr>
+        </thead>
+        <tbody>
+            {% for severity, count in severity_summary %}
+            <tr>
+                <td><span class="chip sev-{{ severity }}">{{ severity }}</span></td>
+                <td class="num">{{ count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2>Findings</h2>
+    {% for severity, findings in grouped_findings %}
+    <div style="margin-top:10px;">
+        <span class="chip sev-{{ severity }}">{{ severity }}</span>
+        <span class="muted"> · {{ findings|length }}</span>
+        {% for finding in findings %}
+        <div class="finding">
+            <div class="mono">{{ finding.rule_id }} · {{ finding.scan.scanner_name }}</div>
+            <div class="msg">{{ finding.message }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% empty %}
+    <p class="empty">No outstanding findings — either the target is clean or it hasn't finished a scan yet.</p>
+    {% endfor %}
+
+    <h2>Scan history</h2>
+    <table>
+        <thead>
+            <tr><th>#</th><th>Scanner</th><th>Status</th><th>State</th><th>When</th></tr>
+        </thead>
+        <tbody>
+            {% for scan in scans %}
+            <tr>
+                <td>{{ scan.id }}</td>
+                <td>{{ scan.scanner_name }}</td>
+                <td>{{ scan.status }}</td>
+                <td>{% if scan.id in current_scan_ids %}current{% else %}superseded{% endif %}</td>
+                <td>{{ scan.created_at|date:"d M Y H:i" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="empty">No scans recorded.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="footer-note">
+        NodeGuard is an internal scanning console. Findings are heuristic and
+        should be validated before acting on them.
+    </div>
+</body>
+</html>

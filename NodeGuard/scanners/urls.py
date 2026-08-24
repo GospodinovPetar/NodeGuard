@@ -9,4 +9,5 @@ urlpatterns = [
     path("partial/", views.scan_rows, name="rows"),
     path("trigger/", views.trigger_scan, name="trigger"),
     path("targets/<int:pk>/", views.target_detail, name="target_detail"),
+    path("targets/<int:pk>/report.pdf", views.target_report, name="target_report"),
 ]
