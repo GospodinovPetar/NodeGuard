@@ -4,15 +4,26 @@
 
 {% block content %}
 <h1 class="text-2xl font-bold mb-1">Scanners</h1>
-<p class="text-slate-400 text-sm mb-6">Enter a target, pick a scanner, and watch results stream in live.</p>
+<p class="text-slate-400 text-sm mb-6">Pick a ready-made security profile, or configure a scanner by hand — then watch results stream in live.</p>
 
 <form method="post" action="{% url 'scanners:trigger' %}" enctype="multipart/form-data"
       class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-8"
-      x-data="{ available: true, scanner: 'demo' }"
-      x-init="$nextTick(() => {
-          available = $refs.scanner.selectedOptions[0]?.dataset.available === 'true';
-          scanner = $refs.scanner.value;
-      })">
+      x-data="{
+          profile: '',
+          profileAvailable: true,
+          scanner: 'demo',
+          scannerAvailable: true,
+          get usable() { return this.profile ? this.profileAvailable : this.scannerAvailable; },
+          syncScanner(el) {
+              this.scanner = el.value;
+              this.scannerAvailable = el.selectedOptions[0]?.dataset.available === 'true';
+          },
+          syncProfile(el) {
+              this.profile = el.value;
+              this.profileAvailable = el.value ? el.selectedOptions[0]?.dataset.available === 'true' : true;
+          }
+      }"
+      x-init="$nextTick(() => syncScanner($refs.scanner))">
     {% csrf_token %}
     <div class="flex flex-wrap gap-4 items-end">
         <div class="flex-1 min-w-[16rem]">
@@ -21,10 +32,26 @@
                    class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono
                           focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand" required>
         </div>
+
         <div>
+            <label class="block text-xs text-slate-400 mb-1" for="profile">Security profile</label>
+            <select id="profile" name="profile" @change="syncProfile($event.target)"
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand">
+                <option value="">— Custom (pick a scanner) —</option>
+                {% for profile in profiles %}
+                <option value="{{ profile.slug }}" data-available="{{ profile.is_available|yesno:'true,false' }}"
+                        {% if not profile.is_available %}disabled{% endif %}>
+                    {{ profile.name }}{% if not profile.is_available %} — {{ profile.scanner_name }} not installed{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div x-show="!profile">
             <label class="block text-xs text-slate-400 mb-1" for="scanner">Scanner</label>
             <select id="scanner" name="scanner" x-ref="scanner"
-                    @change="available = $event.target.selectedOptions[0].dataset.available === 'true'; scanner = $event.target.value"
+                    @change="syncScanner($event.target)"
                     class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm
                            focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand">
                 {% for tool in tools %}
@@ -32,11 +59,13 @@
                         {% if not tool.available %}disabled{% endif %}>
                     {{ tool.name }}{% if not tool.available %} — not installed{% endif %}
                 </option>
+                {% empty %}
+                <option value="" data-available="false" disabled>No scanners enabled — check the catalog</option>
                 {% endfor %}
             </select>
         </div>
 
-        <div x-show="scanner === 'nmap'" x-cloak class="flex gap-3 items-center text-xs text-slate-300 pb-2.5">
+        <div x-show="!profile && scanner === 'nmap'" x-cloak class="flex gap-3 items-center text-xs text-slate-300 pb-2.5">
             <label class="flex items-center gap-1">
                 <input type="checkbox" name="nmap_sv" checked> -sV (service detection)
             </label>
@@ -45,20 +74,20 @@
             </label>
         </div>
 
-        <div x-show="scanner === 'gobuster'" x-cloak>
+        <div x-show="!profile && scanner === 'gobuster'" x-cloak>
             <label class="block text-xs text-slate-400 mb-1" for="wordlist">Wordlist (.txt, optional — falls back to bundled)</label>
             <input type="file" id="wordlist" name="wordlist" accept=".txt"
                    class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs w-64">
         </div>
 
-        <button type="submit" :disabled="!available"
+        <button type="submit" :disabled="!usable"
                 class="px-4 py-2 rounded-lg text-sm font-medium bg-brand-dark hover:bg-brand
                        disabled:opacity-40 disabled:cursor-not-allowed">
             Trigger scan
         </button>
     </div>
-    <p x-show="!available" x-cloak class="text-xs text-amber-400 mt-3">
-        This tool's binary isn't installed on the machine running NodeGuard. Install it or use the Docker image.
+    <p x-show="!usable" x-cloak class="text-xs text-amber-400 mt-3">
+        That tool's binary isn't installed on the machine running NodeGuard. Install it or use the Docker image.
     </p>
 </form>
 

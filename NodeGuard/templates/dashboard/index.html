@@ -35,21 +35,29 @@
     </div>
 </div>
 
-<div class="grid lg:grid-cols-3 gap-6">
-    <!-- Findings by severity -->
+<!-- Charts -->
+<div class="grid lg:grid-cols-2 gap-6 mb-6">
     <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
         <h2 class="font-semibold mb-1">Open findings by severity</h2>
         <p class="text-xs text-slate-500 mb-4">Latest scan per scanner; superseded results excluded.</p>
-        <ul class="space-y-2">
-            {% for severity, count in severity_counts %}
-            <li class="flex items-center justify-between">
-                <span class="px-2 py-0.5 rounded text-xs capitalize {{ severity|severity_classes }}">{{ severity }}</span>
-                <span class="text-slate-300 tabular-nums">{{ count }}</span>
-            </li>
-            {% endfor %}
-        </ul>
+        <div class="relative h-64">
+            <canvas id="severityChart"></canvas>
+            <p id="severityEmpty" class="hidden absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
+                No open findings yet.
+            </p>
+        </div>
     </section>
 
+    <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <h2 class="font-semibold mb-1">Scan activity</h2>
+        <p class="text-xs text-slate-500 mb-4">Scans triggered per day over the last {{ scan_trend|length }} days.</p>
+        <div class="relative h-64">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </section>
+</div>
+
+<div class="grid lg:grid-cols-2 gap-6">
     <!-- Scans by status -->
     <section class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
         <h2 class="font-semibold mb-4">Scans by status</h2>
@@ -71,9 +79,15 @@
         </div>
         <ul class="space-y-2">
             {% for tool in tools %}
-            <li class="flex items-center justify-between">
+            <li class="flex items-center justify-between {% if tool.name in disabled_tools %}opacity-50{% endif %}">
                 <span class="font-mono text-sm">{{ tool.name }}</span>
+                {% if tool.name in disabled_tools %}
+                <span class="flex items-center gap-1.5 text-xs text-slate-500 shrink-0">
+                    <span class="h-2 w-2 rounded-full bg-slate-600"></span> disabled
+                </span>
+                {% else %}
                 {% include "scanners/_tool_status_pill.html" with tool=tool %}
+                {% endif %}
             </li>
             {% endfor %}
         </ul>
@@ -127,4 +141,67 @@
         </table>
     </div>
 </section>
+
+{{ severity_counts|json_script:"severity-data" }}
+{{ scan_trend|json_script:"trend-data" }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+    (function () {
+        if (typeof Chart === "undefined") return;
+        Chart.defaults.color = "#94a3b8";
+        Chart.defaults.borderColor = "rgba(148,163,184,0.12)";
+        Chart.defaults.font.family = "ui-sans-serif, system-ui, sans-serif";
+
+        // Severity palette mirrors the badge colors in scan_extras.py.
+        const SEVERITY_COLORS = {
+            critical: "#e11d48", high: "#ef4444", medium: "#f59e0b",
+            low: "#38bdf8", info: "#64748b",
+        };
+
+        const severity = JSON.parse(document.getElementById("severity-data").textContent)
+            .filter(function (row) { return row[1] > 0; });
+        const sevCanvas = document.getElementById("severityChart");
+        if (severity.length === 0) {
+            sevCanvas.classList.add("hidden");
+            document.getElementById("severityEmpty").classList.remove("hidden");
+        } else {
+            new Chart(sevCanvas, {
+                type: "doughnut",
+                data: {
+                    labels: severity.map(function (r) { return r[0][0].toUpperCase() + r[0].slice(1); }),
+                    datasets: [{
+                        data: severity.map(function (r) { return r[1]; }),
+                        backgroundColor: severity.map(function (r) { return SEVERITY_COLORS[r[0]] || "#64748b"; }),
+                        borderColor: "#0f172a",
+                        borderWidth: 2,
+                    }],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: "right" } },
+                },
+            });
+        }
+
+        const trend = JSON.parse(document.getElementById("trend-data").textContent);
+        new Chart(document.getElementById("trendChart"), {
+            type: "line",
+            data: {
+                labels: trend.map(function (d) { return d.date; }),
+                datasets: [{
+                    label: "Scans",
+                    data: trend.map(function (d) { return d.count; }),
+                    borderColor: "#10b981",
+                    backgroundColor: "rgba(16,185,129,0.15)",
+                    fill: true, tension: 0.3, pointRadius: 2,
+                }],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+            },
+        });
+    })();
+</script>
 {% endblock %}

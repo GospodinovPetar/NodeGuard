@@ -6,8 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # nmap has a debian package; gobuster doesn't, so we pull its prebuilt
 # release binary directly (arch-aware for amd64/arm64 dev machines).
 ARG GOBUSTER_VERSION=3.8.2
+# libpango*/harfbuzz/fontconfig + a base font are WeasyPrint's runtime deps
+# (PDF report export); curl is only needed to fetch the gobuster binary below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         nmap curl ca-certificates \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1 \
+        fonts-dejavu-core \
     && ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
          amd64) GB_ARCH=x86_64 ;; \
