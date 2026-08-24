@@ -1,7 +1,16 @@
-from django.contrib import messages
-from django.shortcuts import get_object_or_404, redirect, render
+from collections import Counter
 
-from .models import Scan, Target
+from django.contrib import messages
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
+from django.utils import timezone
+from django.utils.text import slugify
+
+from catalog.models import ToolState
+
+from .base import Severity
+from .models import Scan, SecurityProfile, Target
 from .registry import list_scanners, tool_status
 from .tasks import run_scan
 
@@ -12,8 +21,20 @@ class ScanOptionError(ValueError):
     pass
 
 
+class MissingPDFBackend(RuntimeError):
+    """weasyprint (or its native libraries) isn't available here — expected on
+    bare Windows dev boxes; the Docker image ships the libs."""
+
+
 def scan_list(request):
-    context = {"scans": _recent_scans(), "tools": tool_status()}
+    # Catalog-disabled tools drop out of the picker entirely — the catalog is
+    # where you turn them back on.
+    disabled = ToolState.disabled_names()
+    context = {
+        "scans": _recent_scans(),
+        "tools": [t for t in tool_status() if t.name not in disabled],
+        "profiles": SecurityProfile.objects.exclude(scanner_name__in=disabled),
+    }
     return render(request, "scanners/scan_list.html", context)
 
 
@@ -31,13 +52,38 @@ def trigger_scan(request):
 
 def _start_scan(request) -> str | None:
     target_value = request.POST.get("target", "").strip()
+    if not target_value:
+        return "Target е задължителен."
+
+    profile_slug = request.POST.get("profile", "").strip()
+    if profile_slug:
+        return _start_profile_scan(target_value, profile_slug)
+    return _start_custom_scan(request, target_value)
+
+
+def _start_profile_scan(target_value: str, slug: str) -> str | None:
+    profile = SecurityProfile.objects.filter(slug=slug).first()
+    if profile is None:
+        return "Непознат profile."
+    if profile.scanner_name in ToolState.disabled_names():
+        return f"'{profile.scanner_name}' е изключен в каталога."
+    if not profile.is_available():
+        return f"'{profile.scanner_name}' не е инсталиран на тази машина."
+
+    target, _ = Target.objects.get_or_create(value=target_value)
+    scan = profile.create_scan(target)
+    run_scan(scan.id)
+    return None
+
+
+def _start_custom_scan(request, target_value: str) -> str | None:
     scanner_name = request.POST.get("scanner", "").strip()
     scanners = list_scanners()
 
-    if not target_value:
-        return "Target е задължителен."
     if scanner_name not in scanners:
         return "Непознат scanner."
+    if scanner_name in ToolState.disabled_names():
+        return f"'{scanner_name}' е изключен в каталога."
     if not scanners[scanner_name].is_available():
         return f"'{scanner_name}' не е инсталиран на тази машина."
 
@@ -69,6 +115,64 @@ def target_detail(request, pk):
         "scans": target.scans_newest_first,
     }
     return render(request, "scanners/target_detail.html", context)
+
+
+def target_report(request, pk):
+    """Per-target PDF: current risk state plus the scan history behind it."""
+    target = get_object_or_404(
+        Target.objects.prefetch_related("scans__findings"), pk=pk
+    )
+    html = render_to_string(
+        "scanners/report.html", _report_context(target), request=request
+    )
+    try:
+        pdf = _render_pdf(html, base_url=request.build_absolute_uri("/"))
+    except MissingPDFBackend:
+        messages.error(
+            request, "PDF export изисква weasyprint (наличен в Docker образа)."
+        )
+        return redirect("scanners:target_detail", pk=pk)
+
+    response = HttpResponse(pdf, content_type="application/pdf")
+    response["Content-Disposition"] = (
+        f'attachment; filename="{_report_filename(target)}"'
+    )
+    return response
+
+
+def _report_context(target):
+    findings = target.current_findings
+    counts = Counter((f.severity or "").lower() for f in findings)
+    grouped = [
+        (sev.value, [f for f in findings if (f.severity or "").lower() == sev.value])
+        for sev in Severity
+    ]
+    return {
+        "target": target,
+        "generated_at": timezone.now(),
+        "current_severity": target.current_severity,
+        "finding_count": len(findings),
+        "severity_summary": [(sev.value, counts.get(sev.value, 0)) for sev in Severity],
+        "grouped_findings": [(sev, items) for sev, items in grouped if items],
+        "scans": target.scans_newest_first,
+        "current_scan_ids": {scan.id for scan in target.latest_scans},
+    }
+
+
+def _report_filename(target) -> str:
+    stamp = timezone.now().strftime("%Y%m%d")
+    return f"nodeguard-{slugify(target.value) or 'target'}-{stamp}.pdf"
+
+
+def _render_pdf(html: str, base_url: str) -> bytes:  # pragma: no cover
+    # WeasyPrint loads native libs (Pango/HarfBuzz) at import time, absent on a
+    # bare Windows box; kept behind this guard so the app and the test suite
+    # never hard-depend on them. Real output is exercised in the Docker image.
+    try:
+        import weasyprint
+    except (ImportError, OSError) as exc:
+        raise MissingPDFBackend from exc
+    return weasyprint.HTML(string=html, base_url=base_url).write_pdf()
 
 
 def _collect_scan_options(request, scanner_name):

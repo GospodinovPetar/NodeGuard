@@ -6,4 +6,5 @@ app_name = "catalog"
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("toggle/<str:name>/", views.toggle, name="toggle"),
 ]

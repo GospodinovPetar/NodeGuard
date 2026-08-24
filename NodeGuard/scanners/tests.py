@@ -22,7 +22,13 @@ from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
-from .views import MAX_WORDLIST_BYTES, ScanOptionError, _collect_scan_options
+from .views import (
+    MAX_WORDLIST_BYTES,
+    MissingPDFBackend,
+    ScanOptionError,
+    _collect_scan_options,
+    _report_context,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -522,7 +528,7 @@ class CatalogIndexViewTests(TestCase):
         # demo's binary is sys.executable, so it's always installed — the
         # count in the header should reflect that regardless of host.
         available = sum(1 for s in statuses if s.available)
-        self.assertContains(response, f"{available}/{len(statuses)} available")
+        self.assertContains(response, f"{available}/{len(statuses)} installed")
         self.assertContains(response, "installed")
 
 
@@ -874,3 +880,119 @@ class RunScanWordlistTests(TestCase):
         self.assertEqual(scan.status, Scan.Status.DONE)
         _, options = spy.call_args.args
         self.assertEqual(options["wordlist_path"], scan.wordlist.path)
+
+
+class DashboardChartsTests(TestCase):
+    def test_dashboard_embeds_chart_payloads(self):
+        response = self.client.get(reverse("dashboard:index"))
+
+        self.assertContains(response, 'id="severity-data"')
+        self.assertContains(response, 'id="trend-data"')
+        self.assertContains(response, "chart.js")
+
+    def test_scan_trend_is_a_gap_free_daily_series(self):
+        target = Target.objects.create(value="10.0.0.5")
+        _done_scan(target, "nmap", "info")
+        _done_scan(target, "gobuster", "low")
+
+        trend = self.client.get(reverse("dashboard:index")).context["scan_trend"]
+
+        # One point per day for the window, and today's bucket holds both scans.
+        self.assertEqual(len(trend), 14)
+        self.assertEqual(sum(point["count"] for point in trend), 2)
+        self.assertEqual(trend[-1]["count"], 2)
+
+
+class ProfilePickerTriggerTests(TestCase):
+    def test_scan_form_lists_seeded_profiles(self):
+        response = self.client.get(reverse("scanners:list"))
+
+        self.assertContains(response, "Quick Scan")
+        self.assertContains(response, "Deep Web Scan")
+
+    def test_profile_submission_materializes_the_preset(self):
+        with (
+            mock.patch("scanners.views.run_scan") as run,
+            mock.patch.object(SecurityProfile, "is_available", return_value=True),
+        ):
+            response = self.client.post(
+                reverse("scanners:trigger"),
+                {"target": "example.com", "profile": "quick-scan"},
+            )
+
+        self.assertRedirects(response, reverse("scanners:list"))
+        scan = Scan.objects.get()
+        self.assertEqual(scan.scanner_name, "nmap")
+        self.assertEqual(scan.options, {"service_detection": True, "aggressive": False})
+        run.assert_called_once_with(scan.id)
+
+    def test_unknown_profile_creates_no_scan(self):
+        response = self.client.post(
+            reverse("scanners:trigger"),
+            {"target": "example.com", "profile": "does-not-exist"},
+        )
+
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("Непознат profile" in str(m) for m in messages))
+
+    def test_unavailable_profile_creates_no_scan(self):
+        with mock.patch.object(SecurityProfile, "is_available", return_value=False):
+            response = self.client.post(
+                reverse("scanners:trigger"),
+                {"target": "example.com", "profile": "quick-scan"},
+            )
+
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("не е инсталиран" in str(m) for m in messages))
+
+
+class TargetReportViewTests(TestCase):
+    def setUp(self):
+        self.target = Target.objects.create(value="10.0.0.9")
+        _done_scan(self.target, "nmap", "high", "info", message="telnet open")
+
+    def test_returns_pdf_attachment(self):
+        with mock.patch(
+            "scanners.views._render_pdf", return_value=b"%PDF-1.5 fake"
+        ) as render_pdf:
+            response = self.client.get(
+                reverse("scanners:target_report", args=[self.target.pk])
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertIn("attachment", response["Content-Disposition"])
+        self.assertIn("nodeguard-", response["Content-Disposition"])
+        self.assertEqual(response.content, b"%PDF-1.5 fake")
+        # The report HTML was rendered for real before hand-off to weasyprint.
+        rendered_html = render_pdf.call_args.args[0]
+        self.assertIn("telnet open", rendered_html)
+
+    def test_missing_backend_redirects_with_a_message(self):
+        with mock.patch("scanners.views._render_pdf", side_effect=MissingPDFBackend):
+            response = self.client.get(
+                reverse("scanners:target_report", args=[self.target.pk])
+            )
+
+        self.assertRedirects(
+            response, reverse("scanners:target_detail", args=[self.target.pk])
+        )
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("weasyprint" in str(m) for m in messages))
+
+    def test_unknown_target_is_404(self):
+        response = self.client.get(reverse("scanners:target_report", args=[9999]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_report_context_groups_only_current_findings(self):
+        context = _report_context(self.target)
+
+        self.assertEqual(context["finding_count"], 2)
+        self.assertEqual(context["current_severity"], "high")
+        # severity_summary spans every severity; grouped_findings only the present.
+        self.assertEqual(len(context["severity_summary"]), 5)
+        present = {severity for severity, _ in context["grouped_findings"]}
+        self.assertEqual(present, {"high", "info"})
