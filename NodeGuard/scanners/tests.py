@@ -1,5 +1,7 @@
+import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,14 +17,17 @@ from django.test import (
 )
 from django.urls import reverse
 
-from . import severity_rules
+from . import sarif, severity_rules
 from .base import Severity, TargetValidationError
 from .gobuster_scanner import WORDLIST_PATH, GobusterScanner
+from .headers_scanner import HttpHeadersScanner
 from .models import Finding, Scan, SecurityProfile, Target
 from .nmap_scanner import NmapScanner
 from .registry import get_scanner, list_scanners, tool_status
 from .tasks import run_scan
+from .tools import http_headers
 from .views import (
+    MAX_SARIF_BYTES,
     MAX_WORDLIST_BYTES,
     MissingPDFBackend,
     ScanOptionError,
@@ -996,3 +1001,255 @@ class TargetReportViewTests(TestCase):
         self.assertEqual(len(context["severity_summary"]), 5)
         present = {severity for severity, _ in context["grouped_findings"]}
         self.assertEqual(present, {"high", "info"})
+
+
+def _sarif(results=None, tool="acme-scanner", rules=None):
+    driver = {"name": tool}
+    if rules is not None:
+        driver["rules"] = rules
+    doc = {
+        "version": "2.1.0",
+        "runs": [{"tool": {"driver": driver}, "results": results or []}],
+    }
+    return json.dumps(doc)
+
+
+class SarifParserTests(SimpleTestCase):
+    def test_maps_level_to_severity(self):
+        text = _sarif(
+            [
+                {"ruleId": "a", "level": "error", "message": {"text": "e"}},
+                {"ruleId": "b", "level": "warning", "message": {"text": "w"}},
+                {"ruleId": "c", "level": "note", "message": {"text": "n"}},
+                {"ruleId": "d", "level": "none", "message": {"text": "x"}},
+                {"ruleId": "e", "message": {"text": "default"}},
+            ]
+        )
+        severities = [f.severity for f in sarif.parse(text).findings]
+
+        self.assertEqual(
+            severities,
+            [
+                Severity.HIGH,
+                Severity.MEDIUM,
+                Severity.LOW,
+                Severity.INFO,
+                Severity.MEDIUM,  # missing level defaults to warning
+            ],
+        )
+
+    def test_security_severity_score_beats_level(self):
+        text = _sarif(
+            [
+                {
+                    "ruleId": "sql",
+                    "level": "note",  # would be LOW, but score wins
+                    "message": {"text": "SQLi"},
+                    "properties": {"security-severity": "9.4"},
+                }
+            ]
+        )
+        self.assertEqual(sarif.parse(text).findings[0].severity, Severity.CRITICAL)
+
+    def test_score_buckets(self):
+        cases = {
+            "9.0": "critical",
+            "7.0": "high",
+            "4.0": "medium",
+            "0.5": "low",
+            "0": "info",
+        }
+        for score, expected in cases.items():
+            with self.subTest(score=score):
+                text = _sarif(
+                    [{"ruleId": "r", "properties": {"security-severity": score}}]
+                )
+                self.assertEqual(sarif.parse(text).findings[0].severity.value, expected)
+
+    def test_score_can_come_from_the_rule(self):
+        text = _sarif(
+            [{"ruleId": "r1", "message": {"text": "m"}}],
+            rules=[{"id": "r1", "properties": {"security-severity": "8.0"}}],
+        )
+        self.assertEqual(sarif.parse(text).findings[0].severity, Severity.HIGH)
+
+    def test_bad_score_falls_back_to_level(self):
+        text = _sarif(
+            [
+                {
+                    "ruleId": "r",
+                    "level": "error",
+                    "properties": {"security-severity": "n/a"},
+                }
+            ]
+        )
+        self.assertEqual(sarif.parse(text).findings[0].severity, Severity.HIGH)
+
+    def test_reads_tool_name_and_message_fallback(self):
+        report = sarif.parse(_sarif([{"ruleId": "only-id"}], tool="MyTool"))
+
+        self.assertEqual(report.tool_name, "MyTool")
+        self.assertEqual(report.findings[0].message, "only-id")
+
+    def test_truncates_overlong_rule_id(self):
+        report = sarif.parse(_sarif([{"ruleId": "x" * 200}]))
+        self.assertEqual(len(report.findings[0].rule_id), 100)
+
+    def test_empty_document_yields_no_findings(self):
+        report = sarif.parse(_sarif([]))
+        self.assertEqual(report.findings, [])
+
+    def test_rejects_non_json(self):
+        with self.assertRaises(sarif.SarifParseError):
+            sarif.parse("not json {")
+
+    def test_rejects_non_sarif_shape(self):
+        with self.assertRaises(sarif.SarifParseError):
+            sarif.parse('{"hello": "world"}')
+
+
+class HttpHeadersToolTests(SimpleTestCase):
+    def test_evaluate_flags_every_missing_header(self):
+        results = http_headers.evaluate({})
+        self.assertEqual(len(results), len(http_headers.SECURITY_HEADERS))
+
+    def test_evaluate_is_case_insensitive_about_present_headers(self):
+        headers = {"Content-Security-Policy": "default-src 'self'"}
+        rule_ids = {r["ruleId"] for r in http_headers.evaluate(headers)}
+
+        self.assertNotIn("http-headers/missing-content-security-policy", rule_ids)
+
+    def test_to_sarif_names_the_tool(self):
+        doc = http_headers.to_sarif([])
+        self.assertEqual(
+            doc["runs"][0]["tool"]["driver"]["name"], http_headers.TOOL_NAME
+        )
+
+
+class HttpHeadersScannerTests(SimpleTestCase):
+    def setUp(self):
+        self.scanner = HttpHeadersScanner()
+
+    def test_registered(self):
+        self.assertIn("headers", list_scanners())
+
+    def test_build_command_prefixes_scheme_and_points_at_the_script(self):
+        command = self.scanner.build_command("example.com")
+
+        self.assertEqual(command[0], sys.executable)
+        self.assertTrue(command[1].endswith("http_headers.py"))
+        self.assertEqual(command[-1], "http://example.com")
+
+    def test_parse_output_normalizes_emitted_sarif(self):
+        # The real end-to-end contract: what the tool emits, the scanner parses.
+        emitted = json.dumps(http_headers.to_sarif(http_headers.evaluate({})))
+        findings = self.scanner.parse_output(emitted)
+
+        self.assertEqual(len(findings), len(http_headers.SECURITY_HEADERS))
+        self.assertTrue(
+            all(f.rule_id.startswith("http-headers/missing-") for f in findings)
+        )
+
+    def test_validate_target_accepts_urls_but_rejects_injection(self):
+        self.assertEqual(
+            self.scanner.validate_target("https://app.internal/login"),
+            "https://app.internal/login",
+        )
+        with self.assertRaises(TargetValidationError):
+            self.scanner.validate_target("-oN /etc/passwd")
+        with self.assertRaises(TargetValidationError):
+            self.scanner.validate_target("example.com:99999")
+
+    def test_is_available_tracks_requests_import(self):
+        with mock.patch("importlib.util.find_spec", return_value=object()):
+            self.assertTrue(self.scanner.is_available())
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            self.assertFalse(self.scanner.is_available())
+
+
+class SarifImportViewTests(TestCase):
+    def _upload(self, content, name="scan.sarif"):
+        data = content if isinstance(content, bytes) else content.encode("utf-8")
+        return SimpleUploadedFile(name, data, content_type="application/json")
+
+    def test_get_renders_the_form(self):
+        response = self.client.get(reverse("scanners:sarif_import"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Import SARIF")
+
+    def test_valid_import_creates_a_done_scan_with_findings(self):
+        results = [
+            {"ruleId": "acme/xss", "level": "error", "message": {"text": "XSS in /q"}}
+        ]
+        response = self.client.post(
+            reverse("scanners:sarif_import"),
+            {"target": "example.com", "sarif": self._upload(_sarif(results))},
+        )
+
+        target = Target.objects.get(value="example.com")
+        self.assertRedirects(
+            response, reverse("scanners:target_detail", args=[target.pk])
+        )
+        scan = Scan.objects.get()
+        self.assertEqual(scan.scanner_name, "acme-scanner")
+        self.assertEqual(scan.status, Scan.Status.DONE)
+        self.assertEqual(scan.findings.get().severity, "high")
+
+    def test_missing_target_is_rejected(self):
+        self.client.post(
+            reverse("scanners:sarif_import"),
+            {"target": "", "sarif": self._upload(_sarif())},
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+
+    def test_overlong_target_is_rejected(self):
+        self.client.post(
+            reverse("scanners:sarif_import"),
+            {"target": "a" * 256, "sarif": self._upload(_sarif())},
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+
+    def test_missing_file_is_rejected(self):
+        self.client.post(reverse("scanners:sarif_import"), {"target": "example.com"})
+        self.assertEqual(Scan.objects.count(), 0)
+
+    def test_wrong_extension_is_rejected(self):
+        response = self.client.post(
+            reverse("scanners:sarif_import"),
+            {"target": "example.com", "sarif": self._upload(_sarif(), name="x.txt")},
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any(".sarif" in str(m) for m in messages))
+
+    def test_oversize_file_is_rejected(self):
+        big = self._upload(b"x" * (MAX_SARIF_BYTES + 1))
+        self.client.post(
+            reverse("scanners:sarif_import"), {"target": "example.com", "sarif": big}
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+
+    def test_invalid_sarif_is_rejected(self):
+        response = self.client.post(
+            reverse("scanners:sarif_import"),
+            {
+                "target": "example.com",
+                "sarif": self._upload(b"not json", name="x.json"),
+            },
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("SARIF" in str(m) for m in messages))
+
+    def test_non_utf8_file_is_rejected(self):
+        response = self.client.post(
+            reverse("scanners:sarif_import"),
+            {
+                "target": "example.com",
+                "sarif": self._upload(b"\xff\xfe\x00", name="x.json"),
+            },
+        )
+        self.assertEqual(Scan.objects.count(), 0)
+        messages = list(response.wsgi_request._messages)
+        self.assertTrue(any("UTF-8" in str(m) for m in messages))
