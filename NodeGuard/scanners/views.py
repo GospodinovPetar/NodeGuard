@@ -9,12 +9,14 @@ from django.utils.text import slugify
 
 from catalog.models import ToolState
 
+from . import sarif
 from .base import Severity
-from .models import Scan, SecurityProfile, Target
+from .models import Finding, Scan, SecurityProfile, Target
 from .registry import list_scanners, tool_status
 from .tasks import run_scan
 
 MAX_WORDLIST_BYTES = 2 * 1024 * 1024
+MAX_SARIF_BYTES = 5 * 1024 * 1024
 
 
 class ScanOptionError(ValueError):
@@ -173,6 +175,63 @@ def _render_pdf(html: str, base_url: str) -> bytes:  # pragma: no cover
     except (ImportError, OSError) as exc:
         raise MissingPDFBackend from exc
     return weasyprint.HTML(string=html, base_url=base_url).write_pdf()
+
+
+def sarif_import(request):
+    """Import findings from any SARIF-compatible tool's output, attached to a
+    target — the upload side of the catalog's SARIF story (the HTTP-headers
+    scanner is the emit side)."""
+    if request.method == "POST":
+        target, error = _import_sarif(request)
+        if error:
+            messages.error(request, error)
+        else:
+            messages.success(request, f"Imported SARIF results for {target.value}.")
+            return redirect("scanners:target_detail", pk=target.pk)
+    return render(request, "scanners/sarif_import.html")
+
+
+def _import_sarif(request):
+    target_value = request.POST.get("target", "").strip()
+    upload = request.FILES.get("sarif")
+
+    if not target_value:
+        return None, "Target е задължителен."
+    if len(target_value) > 255:
+        return None, "Target е твърде дълъг."
+    if upload is None:
+        return None, "Изберете SARIF файл."
+    if upload.size > MAX_SARIF_BYTES:
+        return None, "SARIF файлът е твърде голям (макс. 5 MB)."
+    if not upload.name.lower().endswith((".sarif", ".json")):
+        return None, "Файлът трябва да е .sarif или .json."
+
+    try:
+        report = sarif.parse(upload.read().decode("utf-8"))
+    except UnicodeDecodeError:
+        return None, "Файлът не е валиден UTF-8 текст."
+    except sarif.SarifParseError as exc:
+        return None, f"Невалиден SARIF: {exc}"
+
+    target, _ = Target.objects.get_or_create(value=target_value)
+    scan = Scan.objects.create(
+        target=target,
+        scanner_name=report.tool_name[:100],
+        status=Scan.Status.DONE,
+        options={"source": "sarif-import"},
+        finished_at=timezone.now(),
+    )
+    Finding.objects.bulk_create(
+        Finding(
+            scan=scan,
+            rule_id=f.rule_id,
+            message=f.message,
+            severity=f.severity.value,
+            raw=f.raw,
+        )
+        for f in report.findings
+    )
+    return target, None
 
 
 def _collect_scan_options(request, scanner_name):

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Import SARIF — NodeGuard{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="{% url 'catalog:index' %}" class="text-slate-400 text-sm hover:text-white">← Catalog</a>
+    <h1 class="text-2xl font-bold mt-2">Import SARIF</h1>
+    <p class="text-slate-400 text-sm mt-1 max-w-2xl">
+        Bring in results from any SARIF-compatible tool. NodeGuard normalizes each
+        <code class="font-mono">result</code> into a finding on the target you name,
+        so external scanners show up next to nmap/gobuster on the target page.
+    </p>
+</div>
+
+<form method="post" action="{% url 'scanners:sarif_import' %}" enctype="multipart/form-data"
+      class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 max-w-xl">
+    {% csrf_token %}
+    <div class="mb-4">
+        <label class="block text-xs text-slate-400 mb-1" for="target">Target</label>
+        <input type="text" id="target" name="target" placeholder="example.com  ·  https://app.internal"
+               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono
+                      focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand" required>
+        <p class="text-xs text-slate-500 mt-1">The asset these results describe.</p>
+    </div>
+
+    <div class="mb-5">
+        <label class="block text-xs text-slate-400 mb-1" for="sarif">SARIF file</label>
+        <input type="file" id="sarif" name="sarif" accept=".sarif,.json" required
+               class="block text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0
+                      file:bg-slate-800 file:px-3 file:py-1.5 file:text-slate-200 hover:file:bg-slate-700">
+        <p class="text-xs text-slate-500 mt-1"><code class="font-mono">.sarif</code> or <code class="font-mono">.json</code>, SARIF 2.1.0, max 5 MB.</p>
+    </div>
+
+    <button type="submit"
+            class="px-4 py-2 rounded-lg text-sm font-medium bg-brand-dark hover:bg-brand">
+        Import findings
+    </button>
+</form>
+{% endblock %}

@@ -3,13 +3,19 @@
 {% block title %}Catalog — NodeGuard{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h1 class="text-2xl font-bold">Tool catalog</h1>
-    <p class="text-slate-400 text-sm mt-1">
-        Turn scanners on or off for the console. Disabled tools drop off the
-        dashboard's active list and out of the scan-trigger dropdown.
-        <span class="text-slate-300">{{ enabled_count }} on · {{ available_count }}/{{ total_count }} installed.</span>
-    </p>
+<div class="mb-6 flex items-start justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold">Tool catalog</h1>
+        <p class="text-slate-400 text-sm mt-1">
+            Turn scanners on or off for the console. Disabled tools drop off the
+            dashboard's active list and out of the scan-trigger dropdown.
+            <span class="text-slate-300">{{ enabled_count }} on · {{ available_count }}/{{ total_count }} installed.</span>
+        </p>
+    </div>
+    <a href="{% url 'scanners:sarif_import' %}"
+       class="shrink-0 border border-slate-700 hover:bg-slate-800 px-3 py-2 rounded-lg text-sm">
+        Import SARIF →
+    </a>
 </div>
 
 <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
