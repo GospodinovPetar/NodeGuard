@@ -55,7 +55,7 @@ Severity беше hardcoded вътре във всеки scanner поотдел�
   - Verified с реален binary, не само fixture: вдигнат тестов сайт с `.env`/`.git`/`admin`/`images`, реален `gobuster dir` през worker container-а → `CRITICAL gobuster/exposed-secret .env`, `HIGH .git`, `MEDIUM admin`, `LOW images`. Dashboard-ът вече показва истински severity spread, вместо всичко да е INFO/LOW — което е и предусловие Денисовата pie chart да не излезе едноцветна.
 - ✅ **Coverage gate**: `coverage` в `requirements-dev.txt`, настройки в [NodeGuard/.coveragerc](../../NodeGuard/.coveragerc) (за да се държи еднакво локално и в CI), `coverage run` + `coverage report` стъпки в [ci.yml](../../.github/workflows/ci.yml). Прагът е `fail_under = 80` — **под, не цел**; реалното покритие е **100%** (86 теста). Проверено, че gate-ът реално чупи build при по-нисък процент, не просто минава.
 
-> ⚠️ Намерен pre-existing бъг (не в scope на този тикет, за Радо): `GobusterScanner` не override-ва `validate_target()`, така че base валидацията (host/IP/CIDR) отхвърля всеки target с порт или схема — `example.com:8080` и `http://example.com` дават `refusing to scan target`, въпреки че placeholder-ът във формата рекламира `http://host` и `build_command` умее да сглобява схема. Docstring-ът на `BaseScanner.validate_target` дори казва „Override in scanners whose targets aren't hosts (e.g. gobuster takes a URL)" — просто не е направено.
+> ✅ **Оправено от Радо** (виж неговата секция по-долу) — ⚠️ Намерен pre-existing бъг (не в scope на този тикет, за Радо): `GobusterScanner` не override-ва `validate_target()`, така че base валидацията (host/IP/CIDR) отхвърля всеки target с порт или схема — `example.com:8080` и `http://example.com` дават `refusing to scan target`, въпреки че placeholder-ът във формата рекламира `http://host` и `build_command` умее да сглобява схема. Docstring-ът на `BaseScanner.validate_target` дори казва „Override in scanners whose targets aren't hosts (e.g. gobuster takes a URL)" — просто не е направено.
 
 ### Радо — options generalization + Security Profiles
 
@@ -71,7 +71,32 @@ Severity беше hardcoded вътре във всеки scanner поотдел�
   - `Target.latest_scans()` / `current_findings()` / `current_severity()` — правилото "последен scan per scanner"
   - `/` подрежда targets worst-first; `/scanners/targets/<pk>/` показва current findings + пълна история с `current`/`superseded` маркери
   - Бонус fix намерен при реален преглед в браузъра: "Findings by severity" панелът броеше **всички** findings някога, така че dashboard-ът показваше `High: 1`, докато нито един target не беше High. Сега брои само current findings — иначе Денисовата pie chart щеше да наследи същата грешка.
-- ⏳ Ревю на Петровия severity ruleset — **отблокирано**, [scanners/severity_rules.py](../../NodeGuard/scanners/severity_rules.py) е готов. Конкретно за ревю: (1) `.env`/`id_rsa` като CRITICAL прекалено ли е, или е точно; (2) Redis/MongoDB стоят MEDIUM — по подразбиране са без auth, аргумент за HIGH има; (3) списъците с пътища са малки и вързани към bundled `common.txt` — при по-голям wordlist ще искат разширяване или pattern matching (`*.sql`, `*.bak`) вместо точно съвпадение.
+- ✅ **Ревю на Петровия severity ruleset** — направено, отговори на трите въпроса по-долу. Структурата (`Rule` dataclass, разделяне по *причина* вместо плосък dict) е добра и си остава; забележките са за съдържанието на правилата, не за дизайна.
+
+  **(1) `.env`/`id_rsa` = CRITICAL — правилно, оставя се.** Severity трябва да отразява impact-ако-е-истина, а изложен `.env` обикновено значи DB креденшъли + `SECRET_KEY` → пълна компрометация. Притеснението ми беше false positives от soft-404 (SPA-та връщат 200 за всеки път) — **проверено емпирично и се оказа неоснователно**: gobuster сам прави wildcard проба с random UUID път и отказва да работи (`the server returns a status code that matches ... for non existing urls`), така че такъв сървър изобщо не стига до нашите правила.
+
+  **(2) Redis/MongoDB — MEDIUM се запазва.** Аргументът за HIGH е реален (исторически default без auth, оттам и масовите ransack кампании), но nmap отворен порт ≠ липса на auth. Съвременните Redis (protected-mode) и Mongo (bind localhost от 3.6) са затворени по подразбиране. Ескалация до HIGH изисква *доказателство* за липсваща автентикация, което идва от NSE скриптове (`--script redis-info`) — а ние още не парсваме NSE output. Sprint 3, заедно със SARIF. Дотогава MEDIUM е честната стойност.
+
+  **(3) Exact match — това е реален бъг, не просто "ще потрябва при по-голям wordlist".** Проверено:
+
+  | път | severity | път | severity |
+  |---|---|---|---|
+  | `/.env` | **CRITICAL** | `/.env.bak` | LOW |
+  | `/backup` | **HIGH** | `/backup.sql` | LOW |
+  | `/dump` | **HIGH** | `/dump.sql` | LOW |
+
+  Класацията се **обръща** точно на по-опасния артефакт: `.env.bak` съдържа същите тайни като `.env`, а получава LOW. Препоръка: правила по *разширение* (`.sql`, `.bak`, `.old`, `.swp`, `.pem`, `.key`) в допълнение към точните списъци. **Не prefix matching** — `/id_rsa.pub` в момента дава LOW и това е *правилно* (публичният ключ не е тайна); prefix match би го вдигнал грешно на CRITICAL.
+
+  Оставено на Петър да го имплементира — класификационните правила са неговият learning nugget, а тук стъпката е точно разсъждението "кое прави finding severe".
+
+- ✅ **Fix: gobuster отхвърляше всеки URL target** (бъгът, който Петър маркира за мен — и е мой от Sprint 1: docstring-ът на `validate_target` казваше „Override in scanners whose targets aren't hosts (e.g. gobuster takes a URL)", но override нямаше). `GobusterScanner.validate_target()` вече приема `host`, `host:port`, `http(s)://host`, path — а `build_command`-ът, който вече умееше да сглобява схема, спря да е dead code.
+  - Защитата остава: нищо не може да започва с `-` (argument injection в gobuster argv), без whitespace/shell метазнаци, само `http`/`https` схеми (не `file://`, `gopher://`), и **без userinfo** — `http://user:pass@host` се отхвърля, защото креденшълите щяха да се запишат в `Target.value` и да се рендерират в scan списъка.
+  - Verified с реален binary: вдигнат тестов сайт на порт 9001 (`host:port` формата, която преди изобщо не минаваше валидация) → реален `gobuster dir` мина и върна `CRITICAL .env`, `LOW images`, `INFO admin (301)`.
+
+- ✅ **Fix: тихо провалени scan-ове се записваха като чисти** (намерено при ревюто, не беше в тикета). `tasks.py` пускаше `subprocess.run(..., check=False)` и гледаше само stdout — `returncode` и `stderr` се игнорираха напълно. Когато gobuster откаже да работи (wildcard отговор), той пише на stderr и излиза с код 1, stdout е празен → scan-ът се записваше **`done` с нула findings**, т.е. неразличим от „целта е чиста". За security инструмент това е най-лошият режим на отказ — фалшиво спокойствие.
+  - Сега non-zero exit → `FAILED` + реалната причина от stderr в `scan.error`. Частично парснатите findings се пазят като доказателство.
+  - Допълнителен ефект, който пасва на target-centric модела: `FAILED` scan-овете се изключват от `Target.latest_scans()`, така че счупен run **не може** да измести по-стар успешен scan и да „изчисти" реален HIGH finding.
+  - Verified: истински gobuster срещу SPA, който връща 200 за всичко → `status: failed`, `error: the server returns a status code that matches ... for non existing urls`.
 
 ### Денис — PDF export + charts + profile picker
 

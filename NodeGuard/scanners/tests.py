@@ -194,6 +194,67 @@ class TargetModelTests(TestCase):
             Target.objects.create(value="127.0.0.1")
 
 
+class GobusterTargetValidationTests(SimpleTestCase):
+    """gobuster scans a web root, so its targets are URLs — the base
+    host/IP/CIDR rule used to reject every one of them.
+    """
+
+    def setUp(self):
+        self.scanner = GobusterScanner()
+
+    def test_accepts_urls_with_scheme_port_and_path(self):
+        for target in [
+            "example.com",
+            "http://example.com",
+            "https://example.com",
+            "example.com:8080",
+            "https://example.com:8443",
+            "http://example.com/app",
+            "127.0.0.1:8000/admin/",
+        ]:
+            with self.subTest(target=target):
+                self.assertEqual(self.scanner.validate_target(target), target)
+
+    def test_still_blocks_argument_injection(self):
+        # Widening the shape must not lose the base rule's actual job.
+        for target in ["-u http://evil", "--wordlist=/etc/passwd", "-"]:
+            with self.subTest(target=target):
+                with self.assertRaises(TargetValidationError):
+                    self.scanner.validate_target(target)
+
+    def test_rejects_non_http_schemes(self):
+        # Only `scheme://` forms are distinguishable — a bare `foo:1` is
+        # indistinguishable from host:port and is treated as such (it just
+        # fails to resolve), so it isn't in this list.
+        for target in ["file:///etc/passwd", "gopher://example.com", "ftp://host/x"]:
+            with self.subTest(target=target):
+                with self.assertRaises(TargetValidationError):
+                    self.scanner.validate_target(target)
+
+    def test_rejects_credentials_in_url(self):
+        # Userinfo would be persisted on Target.value and rendered in the
+        # scan list, so it never gets in.
+        with self.assertRaises(TargetValidationError):
+            self.scanner.validate_target("http://admin:hunter2@example.com")
+
+    def test_rejects_shell_metacharacters_and_spaces(self):
+        for target in ["example.com; rm -rf /", "$(whoami)", "a b", "`id`", ""]:
+            with self.subTest(target=target):
+                with self.assertRaises(TargetValidationError):
+                    self.scanner.validate_target(target)
+
+    def test_rejects_out_of_range_port(self):
+        with self.assertRaises(TargetValidationError):
+            self.scanner.validate_target("example.com:99999")
+
+    def test_validated_url_survives_into_the_command(self):
+        target = self.scanner.validate_target("https://example.com:8443/app")
+
+        self.assertIn(
+            "https://example.com:8443/app", self.scanner.build_command(target)
+        )
+
+
 class GobusterScannerTests(TestCase):
     def setUp(self):
         self.scanner = GobusterScanner()
@@ -242,6 +303,51 @@ class GobusterScannerTests(TestCase):
         self.assertEqual(findings[0].rule_id, "gobuster/exposed-secret")
         self.assertEqual(findings[1].severity, Severity.LOW)
         self.assertEqual(findings[1].rule_id, "gobuster/discovered-path")
+
+
+class RunScanExitCodeTests(TestCase):
+    """A tool that refuses to run must not look like a clean result."""
+
+    def _run_with(self, returncode, stdout="", stderr=""):
+        target = Target.objects.create(value="127.0.0.1")
+        scan = Scan.objects.create(target=target, scanner_name="demo")
+        completed = subprocess.CompletedProcess(
+            args=["demo"], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+        with mock.patch("scanners.tasks.subprocess.run", return_value=completed):
+            run_scan(scan.id)
+        scan.refresh_from_db()
+        return scan
+
+    def test_nonzero_exit_marks_the_scan_failed(self):
+        scan = self._run_with(1, stderr="server returns 200 for non existing urls")
+
+        self.assertEqual(scan.status, Scan.Status.FAILED)
+        self.assertIn("non existing urls", scan.error)
+
+    def test_nonzero_exit_without_stderr_still_records_a_reason(self):
+        scan = self._run_with(2)
+
+        self.assertEqual(scan.status, Scan.Status.FAILED)
+        self.assertIn("exited with code 2", scan.error)
+
+    def test_failed_run_does_not_supersede_an_earlier_good_scan(self):
+        target = Target.objects.create(value="10.0.0.7")
+        _done_scan(target, "nmap", "high")
+        broken = Scan.objects.create(target=target, scanner_name="nmap")
+        completed = subprocess.CompletedProcess(
+            args=["nmap"], returncode=1, stdout="", stderr="boom"
+        )
+        with mock.patch("scanners.tasks.subprocess.run", return_value=completed):
+            run_scan(broken.id)
+
+        # The old HIGH still stands: a scan that never ran can't clear it.
+        self.assertEqual(target.current_severity, "high")
+
+    def test_zero_exit_is_still_done(self):
+        scan = self._run_with(0, stdout="demo scan ok")
+
+        self.assertEqual(scan.status, Scan.Status.DONE)
 
 
 class RunScanTests(TestCase):

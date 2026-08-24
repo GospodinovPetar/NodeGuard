@@ -38,7 +38,23 @@ def run_scan(scan_id: int) -> None:
             )
             for f in findings
         )
-        scan.status = Scan.Status.DONE
+        if result.returncode == 0:
+            scan.status = Scan.Status.DONE
+        else:
+            # A tool that refuses to run writes to stderr and exits non-zero
+            # while stdout stays empty — e.g. gobuster bailing out when the
+            # server answers 200 for every path. Trusting stdout alone stored
+            # that as DONE with no findings, which reads as "target is clean"
+            # rather than "the scan never happened". Findings parsed so far
+            # are kept as evidence, but the run is not treated as a result:
+            # FAILED scans are excluded from Target.latest_scans(), so a
+            # broken run can't supersede an earlier good one.
+            scan.status = Scan.Status.FAILED
+            reason = (
+                result.stderr.strip()
+                or f"{scan.scanner_name} exited with code {result.returncode}"
+            )
+            scan.error = reason[:2000]
     except Exception as exc:  # noqa: BLE001 — surface any failure on the Scan row
         scan.status = Scan.Status.FAILED
         scan.error = str(exc)
