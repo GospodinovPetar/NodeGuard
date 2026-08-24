@@ -27,17 +27,7 @@ def run_scan(scan_id: int) -> None:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=600, check=False
         )
-        findings = scanner.parse_output(result.stdout)
-        Finding.objects.bulk_create(
-            Finding(
-                scan=scan,
-                rule_id=f.rule_id,
-                message=f.message,
-                severity=f.severity.value,
-                raw=f.raw,
-            )
-            for f in findings
-        )
+        Finding.store(scan, scanner.parse_output(result.stdout))
         if result.returncode == 0:
             scan.status = Scan.Status.DONE
         else:

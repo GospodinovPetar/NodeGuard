@@ -79,15 +79,12 @@
         </div>
         <ul class="space-y-2">
             {% for tool in tools %}
-            <li class="flex items-center justify-between {% if tool.name in disabled_tools %}opacity-50{% endif %}">
+            <li class="flex items-center justify-between {% if tool.disabled %}opacity-50{% endif %}">
                 <span class="font-mono text-sm">{{ tool.name }}</span>
-                {% if tool.name in disabled_tools %}
-                <span class="flex items-center gap-1.5 text-xs text-slate-500 shrink-0">
-                    <span class="h-2 w-2 rounded-full bg-slate-600"></span> disabled
+                <span class="flex items-center gap-2 shrink-0">
+                    {% if tool.disabled %}<span class="text-xs text-slate-500">disabled</span>{% endif %}
+                    {% include "scanners/_tool_status_pill.html" with tool=tool only %}
                 </span>
-                {% else %}
-                {% include "scanners/_tool_status_pill.html" with tool=tool %}
-                {% endif %}
             </li>
             {% endfor %}
         </ul>

@@ -12,7 +12,7 @@ from catalog.models import ToolState
 from . import sarif
 from .base import Severity
 from .models import Finding, Scan, SecurityProfile, Target
-from .registry import list_scanners, tool_status
+from .registry import list_scanners
 from .tasks import run_scan
 
 MAX_WORDLIST_BYTES = 2 * 1024 * 1024
@@ -31,10 +31,11 @@ class MissingPDFBackend(RuntimeError):
 def scan_list(request):
     # Catalog-disabled tools drop out of the picker entirely — the catalog is
     # where you turn them back on.
-    disabled = ToolState.disabled_names()
+    tools = ToolState.catalog_tools()
+    disabled = {t.name for t in tools if t.disabled}
     context = {
         "scans": _recent_scans(),
-        "tools": [t for t in tool_status() if t.name not in disabled],
+        "tools": [t for t in tools if not t.disabled],
         "profiles": SecurityProfile.objects.exclude(scanner_name__in=disabled),
     }
     return render(request, "scanners/scan_list.html", context)
@@ -221,16 +222,7 @@ def _import_sarif(request):
         options={"source": "sarif-import"},
         finished_at=timezone.now(),
     )
-    Finding.objects.bulk_create(
-        Finding(
-            scan=scan,
-            rule_id=f.rule_id,
-            message=f.message,
-            severity=f.severity.value,
-            raw=f.raw,
-        )
-        for f in report.findings
-    )
+    Finding.store(scan, report.findings)
     return target, None
 
 

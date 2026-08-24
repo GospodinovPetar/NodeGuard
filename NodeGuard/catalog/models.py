@@ -1,4 +1,29 @@
+import dataclasses
+
 from django.db import models
+
+from scanners.registry import tool_status
+
+
+@dataclasses.dataclass(frozen=True)
+class CatalogTool:
+    """A registered scanner as every screen shows it: what it is, whether its
+    binary is installed, and whether the catalog has it switched on.
+
+    Registration, availability and catalog state come from three different
+    places; joining them here means the dashboard, the catalog and the scan
+    form read one shape instead of each re-deriving their own.
+    """
+
+    name: str
+    binary_name: str
+    path: str | None
+    available: bool
+    disabled: bool
+
+    @property
+    def enabled(self) -> bool:
+        return not self.disabled
 
 
 class ToolState(models.Model):
@@ -20,3 +45,18 @@ class ToolState(models.Model):
     @classmethod
     def disabled_names(cls) -> set[str]:
         return set(cls.objects.filter(enabled=False).values_list("name", flat=True))
+
+    @classmethod
+    def catalog_tools(cls) -> list[CatalogTool]:
+        """Every registered scanner, joined to its install state and on/off state."""
+        disabled = cls.disabled_names()
+        return [
+            CatalogTool(
+                name=status.name,
+                binary_name=status.binary_name,
+                path=status.path,
+                available=status.available,
+                disabled=status.name in disabled,
+            )
+            for status in tool_status()
+        ]

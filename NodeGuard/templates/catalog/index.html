@@ -26,7 +26,7 @@
                 <h2 class="font-semibold text-lg capitalize">{{ tool.name }}</h2>
                 <p class="font-mono text-xs text-slate-500 mt-0.5">{{ tool.binary_name }}</p>
             </div>
-            {% include "scanners/_tool_status_pill.html" with tool=tool %}
+            {% include "scanners/_tool_status_pill.html" with tool=tool only %}
         </div>
 
         <p class="text-xs text-slate-400 mt-3 flex-1">

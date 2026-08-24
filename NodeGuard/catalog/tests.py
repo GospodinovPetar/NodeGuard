@@ -52,7 +52,8 @@ class ToggleReflectionTests(TestCase):
 
         response = self.client.get(reverse("dashboard:index"))
 
-        self.assertEqual(response.context["disabled_tools"], {"demo"})
+        marked = {t.name for t in response.context["tools"] if t.disabled}
+        self.assertEqual(marked, {"demo"})
         self.assertContains(response, "disabled")
 
     def test_disabled_tool_drops_from_the_scan_form(self):

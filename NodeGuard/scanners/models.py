@@ -58,7 +58,8 @@ class Scan(models.Model):
     options = models.JSONField(default=dict, blank=True)
     wordlist = models.FileField(upload_to="wordlists/", blank=True, null=True)
     error = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Indexed: the scan list polls newest-first every 2s from every open tab.
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
@@ -141,3 +142,22 @@ class Finding(models.Model):
 
     def __str__(self) -> str:
         return f"[{self.severity}] {self.rule_id}"
+
+    @classmethod
+    def store(cls, scan, findings) -> None:
+        """Persist parsed `base.Finding` dataclasses against a Scan.
+
+        Both entry points — a scanner run (tasks.run_scan) and a SARIF upload
+        — produce the same dataclasses, so the enum→string conversion lives
+        here rather than being rewritten at each call site.
+        """
+        cls.objects.bulk_create(
+            cls(
+                scan=scan,
+                rule_id=f.rule_id,
+                message=f.message,
+                severity=f.severity.value,
+                raw=f.raw,
+            )
+            for f in findings
+        )

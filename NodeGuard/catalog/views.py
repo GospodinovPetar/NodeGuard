@@ -2,29 +2,19 @@ from django.contrib import messages
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
-from scanners.registry import tool_status
+from scanners.registry import is_registered
 
 from .models import ToolState
 
 
 def index(request):
     """App-store style catalog: every registered tool, whether its binary is
-    installed (tool_status()), and its on/off state (ToolState)."""
-    disabled = ToolState.disabled_names()
-    tools = [
-        {
-            "name": s.name,
-            "binary_name": s.binary_name,
-            "available": s.available,
-            "path": s.path,
-            "enabled": s.name not in disabled,
-        }
-        for s in tool_status()
-    ]
+    installed, and its on/off state."""
+    tools = ToolState.catalog_tools()
     context = {
         "tools": tools,
-        "available_count": sum(1 for t in tools if t["available"]),
-        "enabled_count": sum(1 for t in tools if t["enabled"]),
+        "available_count": sum(1 for t in tools if t.available),
+        "enabled_count": sum(1 for t in tools if t.enabled),
         "total_count": len(tools),
     }
     return render(request, "catalog/index.html", context)
@@ -34,8 +24,7 @@ def index(request):
 def toggle(request, name):
     """Flip a tool's on/off state. Persisted server-side so the dashboard and
     the scan form honour it — disabled tools drop out of the scan dropdown."""
-    registered = {s.name for s in tool_status()}
-    if name not in registered:
+    if not is_registered(name):
         messages.error(request, "Unknown tool.")
         return redirect("catalog:index")
 

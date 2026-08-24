@@ -9,7 +9,6 @@ from django.utils import timezone
 from catalog.models import ToolState
 from scanners.base import Severity
 from scanners.models import Scan, Target
-from scanners.registry import tool_status
 
 TREND_DAYS = 14
 
@@ -21,7 +20,7 @@ def index(request):
         f.severity for row in rows for f in row["target"].current_findings
     )
 
-    statuses = tool_status()
+    tools = ToolState.catalog_tools()
     context = {
         "total_targets": len(rows),
         "total_scans": sum(status_counts.values()),
@@ -32,9 +31,8 @@ def index(request):
             (s.value, severity_counts.get(s.value, 0)) for s in Severity
         ],
         "scan_trend": _scan_trend(),
-        "tools": statuses,
-        "tools_available": sum(1 for s in statuses if s.available),
-        "disabled_tools": ToolState.disabled_names(),
+        "tools": tools,
+        "tools_available": sum(1 for t in tools if t.available),
         "targets": rows,
     }
     return render(request, "dashboard/index.html", context)

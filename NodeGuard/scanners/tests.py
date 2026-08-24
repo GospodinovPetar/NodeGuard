@@ -74,11 +74,22 @@ class RegistryTests(TestCase):
         self.assertTrue(statuses["demo"].available)
         self.assertEqual(statuses["nmap"].binary_name, "nmap")
 
-    def test_tool_status_available_follows_path_lookup(self):
+    def test_tool_status_available_follows_the_scanner(self):
         # nmap may or may not be installed on this machine, so assert the
         # relationship rather than the outcome.
+        scanners = list_scanners()
         for status in tool_status():
-            self.assertEqual(status.available, status.path is not None)
+            self.assertEqual(status.available, scanners[status.name].is_available())
+
+    def test_tool_status_honours_a_scanner_that_wraps_no_binary(self):
+        # http-headers' binary_name is sys.executable, so a PATH probe alone
+        # would call it installed even with `requests` missing — while the
+        # trigger, which asks the scanner, would refuse to run it.
+        with mock.patch.object(HttpHeadersScanner, "is_available", return_value=False):
+            status = {s.name: s for s in tool_status()}["headers"]
+
+        self.assertFalse(status.available)
+        self.assertIsNotNone(status.path)
 
 
 class TargetValidationTests(SimpleTestCase):
